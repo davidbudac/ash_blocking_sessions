@@ -19,6 +19,8 @@
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: var(--ink); background: var(--bg); font-size: 13px; }
+    button, select, input { font: inherit; }
+    :where(button, select, input):focus-visible { outline: 2px solid #7fb3d5; outline-offset: 2px; }
     header { background: var(--header-bg); color: #ecf0f1; padding: 14px 22px; }
     header h1 { margin: 0; font-size: 18px; font-weight: 500; letter-spacing: 0.2px; }
     header .meta { font-size: 12px; color: #bdc3c7; margin-top: 4px; }
@@ -26,8 +28,17 @@
     .controls label { display: inline-flex; align-items: center; gap: 6px; }
     .controls select, .controls input[type=number] { padding: 3px 6px; border: 1px solid #4a5d70; border-radius: 3px; background: #fff; color: var(--ink); font-size: 12px; }
     .controls input[type=number] { width: 60px; }
-    section { background: var(--card); margin: 16px 22px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    main { padding: 16px 22px 22px; }
+    section { background: var(--card); margin: 0 0 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
     section h2 { font-size: 13px; margin: 0 0 10px 0; color: #555; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+    .impact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+    .impact-item { background: #fff; padding: 10px 12px; min-inline-size: 0; }
+    .impact-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.35px; }
+    .impact-value { margin-top: 4px; font-size: 18px; line-height: 1.15; font-weight: 650; color: #22313f; overflow-wrap: anywhere; }
+    .impact-sub { margin-top: 3px; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+    .legend-inline { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+    .legend-dot { inline-size: 9px; block-size: 9px; display: inline-block; border-radius: 999px; margin-inline-end: 5px; vertical-align: -1px; }
+    .legend-stroke { inline-size: 14px; block-size: 8px; display: inline-block; border: 2px solid currentColor; margin-inline-end: 5px; vertical-align: -1px; }
     .scrubber { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
     .scrubber input[type=range] { flex: 1; }
     .scrubber button { padding: 2px 10px; border: 1px solid #bbb; background: #f8f9fa; border-radius: 3px; cursor: pointer; font-size: 13px; }
@@ -63,7 +74,8 @@
     </label>
     <label>Color by:
       <select id="colorBy">
-        <option value="event" selected>Waiter event</option>
+        <option value="rootBlocker" selected>Root blocker</option>
+        <option value="event">Waiter event</option>
         <option value="blocker">Blocker SID</option>
         <option value="waitClass">Wait class</option>
         <option value="user">Username</option>
@@ -82,36 +94,50 @@
     </fieldset>
     <span style="margin-left:auto; color:#bdc3c7;" id="counter"></span>
   </div>
-  <section>
-    <h2>Overview — blocked sessions per bucket (stacked)</h2>
-    <div id="chart-overview" style="height: 220px"></div>
-    <div class="footnote">Bars stack the chosen "Color by" categories. Click a bar to drill the detail table below.</div>
-  </section>
-  <section>
-    <h2>Swimlane — per-session blocking timeline</h2>
-    <div id="chart-swimlane" style="height: 580px"></div>
-    <div class="footnote">Y-axis: top-N waiter SIDs (most-blocked first). Each bar segment = a continuous run of samples where the waiter was blocked by the same color-key. Hover for details.</div>
-  </section>
-  <section>
-    <h2>Blocking tree — waiter → blocker chains at a moment in time</h2>
-    <div class="scrubber">
-      <button id="treePlay" title="Auto-advance through buckets">&#9654;</button>
-      <input id="treeScrub" type="range" min="0" max="0" step="1" value="0">
-      <span id="treeTime" style="min-width: 170px; font-family: ui-monospace, SF Mono, Menlo, monospace;">—</span>
-      <span id="treeStat" style="color: var(--muted);"></span>
-    </div>
-    <div id="chart-tree" style="height: 560px"></div>
-    <div class="footnote">Arrows point waiter → blocker. Edge label = the event the waiter is on. Blue = pure waiter, orange = chain middle (both blocks and is blocked), red = pure blocker.</div>
-  </section>
-  <section>
-    <h2>Chain timeline — how blocking trees evolved across snapshots</h2>
-    <div id="chart-chain" style="height: 460px"></div>
-    <div class="footnote">Each row is one SID, grouped by its dominant root blocker (computed across the whole window for a stable layout) and indented by depth in the chain. Filled cells = SID was waiting in that bucket (OEM color by current "Color by"). Outlined cells = SID was only the blocker target in that bucket (so root SIDs are usually all-outlined, mid-chain SIDs are filled, leaves are filled). Click a cell to drill the detail table.</div>
-  </section>
-  <section>
-    <h2>Sample detail</h2>
-    <div id="sampleTableWrap"><div class="empty">Click an overview bar, swimlane segment, or tree edge to populate this.</div></div>
-  </section>
+  <main>
+    <section>
+      <h2>Blocking impact</h2>
+      <div id="impactSummary" class="impact-grid"></div>
+    </section>
+    <section>
+      <h2>Overview — blocked samples by bucket</h2>
+      <div id="chart-overview" style="height: 220px"></div>
+      <div class="footnote">Bars stack the selected color dimension. Click a bar to drill the detail table below.</div>
+    </section>
+    <section>
+      <h2>Swimlane — blocked waiters grouped by root blocker</h2>
+      <div id="chart-swimlane" style="height: 580px"></div>
+      <div class="footnote">Rows are the top waiter SIDs, sorted by root blocker and impact. Each segment is a continuous blocked run.</div>
+    </section>
+    <section>
+      <h2>Blocking chain map — root blocker → waiters at a moment in time</h2>
+      <div class="scrubber">
+        <button id="treePlay" title="Auto-advance through buckets">&#9654;</button>
+        <input id="treeScrub" type="range" min="0" max="0" step="1" value="0" aria-label="Blocking chain snapshot">
+        <span id="treeTime" style="min-width: 170px; font-family: ui-monospace, SF Mono, Menlo, monospace;">—</span>
+        <span id="treeStat" style="color: var(--muted);"></span>
+      </div>
+      <div id="chart-tree" style="height: 560px"></div>
+      <div class="legend-inline">
+        <span><span class="legend-dot" style="background:#c0392b"></span>root blocker</span>
+        <span><span class="legend-dot" style="background:#e67e22"></span>blocked and blocking</span>
+        <span><span class="legend-dot" style="background:#2980b9"></span>waiter</span>
+      </div>
+    </section>
+    <section>
+      <h2>Chain timeline — blocking role over time</h2>
+      <div id="chart-chain" style="height: 460px"></div>
+      <div class="legend-inline">
+        <span><span class="legend-dot" style="background:#5470c6"></span>filled = waiting</span>
+        <span><span class="legend-stroke" style="color:#5470c6"></span>outline = blocking others</span>
+      </div>
+      <div class="footnote">Rows are grouped under their dominant root blocker. Click a cell to drill the detail table.</div>
+    </section>
+    <section>
+      <h2>Sample detail</h2>
+      <div id="sampleTableWrap"><div class="empty">Click an overview bar, swimlane segment, chain edge, or timeline cell to populate this.</div></div>
+    </section>
+  </main>
   <script>
     window.ASH_META = __META_JSON__;
     window.ASH_DATA = __DATA_JSON__;
@@ -250,6 +276,7 @@
 
     function colorKey(d) {
       const mode = colorBySel.value;
+      if (mode === 'rootBlocker') return rootBlockerFor(waiterKey(d));
       if (mode === 'blocker')   return `${d.bInst||1}:${d.bSid}`;
       if (mode === 'waitClass') return d.wc || 'Other';
       if (mode === 'user')      return d.user || '(unknown user)';
@@ -261,6 +288,96 @@
 
     function waiterKey(d) { return `${d.inst||1}:${d.sid}`; }
     function blockerKey(d) { return `${d.bInst||1}:${d.bSid}`; }
+
+    let _chainCache = null;
+    function buildChainCache() {
+      const parentCounts = new Map();
+      const allSids = new Set();
+      const waitCount = new Map();
+      const blockCount = new Map();
+      for (const d of data) {
+        const wk = waiterKey(d), bk = blockerKey(d);
+        allSids.add(wk); allSids.add(bk);
+        waitCount.set(wk, (waitCount.get(wk) || 0) + 1);
+        blockCount.set(bk, (blockCount.get(bk) || 0) + 1);
+        if (!parentCounts.has(wk)) parentCounts.set(wk, new Map());
+        const m = parentCounts.get(wk);
+        m.set(bk, (m.get(bk) || 0) + 1);
+      }
+      const parentOf = new Map();
+      for (const [sid, m] of parentCounts) {
+        parentOf.set(sid, [...m.entries()].sort((a,b) => b[1] - a[1])[0][0]);
+      }
+      function rootAndDepth(sid) {
+        const seen = new Set([sid]);
+        let cur = sid, depth = 0;
+        while (parentOf.has(cur)) {
+          const p = parentOf.get(cur);
+          if (seen.has(p)) break;
+          seen.add(p); cur = p; depth++;
+        }
+        return { root: cur, depth };
+      }
+      return { parentOf, allSids, waitCount, blockCount, rootAndDepth };
+    }
+    function chainCache() {
+      if (_chainCache === null) _chainCache = buildChainCache();
+      return _chainCache;
+    }
+    function rootBlockerFor(sidKey) {
+      return chainCache().rootAndDepth(sidKey).root;
+    }
+
+    function renderImpactSummary() {
+      const { allSids, waitCount, blockCount, rootAndDepth } = chainCache();
+      const uniqueWaiters = waitCount.size;
+      const uniqueBlockers = blockCount.size;
+      const rootImpact = new Map();
+      for (const d of data) {
+        const root = rootAndDepth(waiterKey(d)).root;
+        if (!rootImpact.has(root)) rootImpact.set(root, { samples: 0, waiters: new Set(), modules: new Map(), users: new Map(), first: d._tms, last: d._tms });
+        const r = rootImpact.get(root);
+        r.samples++;
+        r.waiters.add(waiterKey(d));
+        if (d.module) r.modules.set(d.module, (r.modules.get(d.module) || 0) + 1);
+        if (d.user) r.users.set(d.user, (r.users.get(d.user) || 0) + 1);
+        r.first = Math.min(r.first, d._tms);
+        r.last = Math.max(r.last, d._tms);
+      }
+      const topRoot = [...rootImpact.entries()].sort((a,b) => b[1].samples - a[1].samples)[0];
+      const buckets = new Map();
+      const ms = bucketMs();
+      for (const d of data) {
+        const b = Math.floor(d._tms / ms) * ms;
+        if (!buckets.has(b)) buckets.set(b, new Set());
+        buckets.get(b).add(waiterKey(d));
+      }
+      const peak = [...buckets.entries()]
+        .map(([b, s]) => ({ b, n: s.size }))
+        .sort((a,b) => b.n - a.n)[0] || { b: data[0]._tms, n: 0 };
+      const topEvent = topValue(data.map(d => d.ev || '(no event)'));
+      const topModule = topRoot ? topValue([...topRoot[1].modules.entries()].flatMap(([v,n]) => Array(n).fill(v))) : null;
+      const topUser = topRoot ? topValue([...topRoot[1].users.entries()].flatMap(([v,n]) => Array(n).fill(v))) : null;
+      const rootLabel = topRoot ? decorateSidLabel(topRoot[0]) : '(none)';
+      const duration = topRoot ? Math.max(1, Math.round((topRoot[1].last - topRoot[1].first) / 1000)) : 0;
+      document.getElementById('impactSummary').innerHTML = [
+        impactItem('Top root blocker', rootLabel, topRoot ? `${topRoot[1].samples} samples across ${topRoot[1].waiters.size} waiter(s)` : ''),
+        impactItem('Peak blocked waiters', peak.n, `${fmtTs(peak.b)} bucket`),
+        impactItem('Blocked samples', data.length, `${uniqueWaiters} waiters, ${uniqueBlockers} blockers, ${allSids.size} SIDs`),
+        impactItem('Dominant workload', topModule ? topModule.value : '(none)', topUser ? `User ${topUser.value}` : ''),
+        impactItem('Top wait event', topEvent ? topEvent.value : '(none)', topEvent ? `${topEvent.count} samples` : ''),
+        impactItem('Top-root duration', `${duration}s`, topRoot ? `${fmtTs(topRoot[1].first)} to ${fmtTs(topRoot[1].last)}` : '')
+      ].join('');
+    }
+    function impactItem(label, value, sub) {
+      return `<div class="impact-item"><div class="impact-label">${escapeHtml(label)}</div><div class="impact-value">${escapeHtml(value)}</div><div class="impact-sub">${escapeHtml(sub || '')}</div></div>`;
+    }
+    function topValue(values) {
+      const counts = new Map();
+      for (const v of values) counts.set(v, (counts.get(v) || 0) + 1);
+      const top = [...counts.entries()].sort((a,b) => b[1] - a[1])[0];
+      return top ? { value: top[0], count: top[1] } : null;
+    }
 
     // Per-SID identifier resolver: walks the dataset once and picks the most
     // frequent value of each identifier per SID (handles cases where a SID
@@ -420,7 +537,21 @@
         const k = waiterKey(d);
         waiterCounts.set(k, (waiterCounts.get(k)||0) + 1);
       }
-      const topWaiters = [...waiterCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0, topN).map(x=>x[0]);
+      const rootTotals = new Map();
+      for (const [sid, n] of waiterCounts) {
+        const root = rootBlockerFor(sid);
+        rootTotals.set(root, (rootTotals.get(root) || 0) + n);
+      }
+      const topWaiters = [...waiterCounts.entries()]
+        .sort((a,b) => {
+          const ar = rootBlockerFor(a[0]), br = rootBlockerFor(b[0]);
+          const rd = (rootTotals.get(br) || 0) - (rootTotals.get(ar) || 0);
+          if (rd) return rd;
+          if (ar !== br) return ar.localeCompare(br);
+          return b[1] - a[1];
+        })
+        .slice(0, topN)
+        .map(x=>x[0]);
       const topSet = new Set(topWaiters);
 
       const byWaiter = new Map();
@@ -497,12 +628,12 @@
                    `Color: ${r.ck}`;
           }
         },
-        grid: { left: 110, right: 20, top: 10, bottom: 30, containLabel: true },
+        grid: { left: 170, right: 20, top: 10, bottom: 30, containLabel: true },
         xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
         yAxis: {
           type: 'category', data: topWaiters,
           name: 'Waiter inst:sid', nameTextStyle:{fontSize:10},
-          axisLabel: { fontSize: 10, formatter: v => decorateSidLabel(v) },
+          axisLabel: { fontSize: 10, formatter: v => `${rootBlockerFor(v)} → ${decorateSidLabel(v)}` },
           inverse: true
         },
         series: [{
@@ -521,7 +652,7 @@
       });
     }
 
-    // ----- Blocking tree (force-directed graph) with scrubber -----
+    // ----- Blocking chain map (deterministic layered graph) with scrubber -----
     let treeBuckets = [];
     let treeBucketMap = new Map();
 
@@ -563,9 +694,12 @@
       const samples = treeBucketMap.get(b) || [];
       document.getElementById('treeStat').textContent = `${samples.length} samples in ${bucketSel.options[bucketSel.selectedIndex].text} bucket`;
 
-      // Build nodes from union of waiters & blockers, and edges with event labels.
+      // Build nodes from union of waiters & blockers. Edges are drawn blocker -> waiter
+      // so root causes read left-to-right while preserving sample drilldown.
       const nodeMap = new Map();
-      const edgeMap = new Map(); // key: w->b -> {label, samples[], ck}
+      const edgeMap = new Map(); // key: blocker->waiter -> {label, samples[], ck}
+      const children = new Map();
+      const parentOf = new Map();
 
       for (const s of samples) {
         const wk = waiterKey(s);
@@ -576,23 +710,53 @@
         nodeMap.get(wk).samples.push(s);
         nodeMap.get(bk).isBlocker = true;
 
-        const ek = `${wk}|${bk}`;
+        if (!children.has(bk)) children.set(bk, new Set());
+        children.get(bk).add(wk);
+        parentOf.set(wk, bk);
+
+        const ek = `${bk}|${wk}`;
         let e = edgeMap.get(ek);
-        if (!e) { e = { source: wk, target: bk, samples: [], ck: colorKey(s), events: new Set() }; edgeMap.set(ek, e); }
+        if (!e) { e = { source: bk, target: wk, samples: [], ck: colorKey(s), events: new Set() }; edgeMap.set(ek, e); }
         e.samples.push(s);
         e.events.add(s.ev || '');
       }
 
       const cmap = colorMapFor(new Set([...edgeMap.values()].map(e => e.ck)));
+      const roots = [...nodeMap.keys()]
+        .filter(sid => !parentOf.has(sid))
+        .sort((a,b) => (nodeMap.get(b).samples.length + (children.get(b)?.size || 0)) - (nodeMap.get(a).samples.length + (children.get(a)?.size || 0)));
+      const positions = new Map();
+      let row = 0;
+      function placeSubtree(sid, depth) {
+        if (positions.has(sid)) return;
+        positions.set(sid, { depth, row: row++ });
+        const kids = [...(children.get(sid) || [])].sort((a,b) => {
+          const ad = (children.get(a)?.size || 0), bd = (children.get(b)?.size || 0);
+          if (ad !== bd) return bd - ad;
+          return (nodeMap.get(b).samples.length || 0) - (nodeMap.get(a).samples.length || 0);
+        });
+        for (const child of kids) placeSubtree(child, depth + 1);
+      }
+      for (const root of roots) {
+        placeSubtree(root, 0);
+        row++;
+      }
+      for (const sid of nodeMap.keys()) placeSubtree(sid, 0);
+      const maxDepth = Math.max(1, ...[...positions.values()].map(p => p.depth));
+      const xGap = Math.max(170, Math.min(260, 760 / maxDepth));
+      const yGap = Math.max(48, Math.min(86, 430 / Math.max(1, row - 1)));
 
       const nodes = [...nodeMap.values()].map(n => {
         let color, category;
-        if (n.isWaiter && n.isBlocker) { color = 'var(--chain)'; category = 'chain'; }
+        if (n.isWaiter && n.isBlocker) { color = '#e67e22';      category = 'chain'; }
         else if (n.isBlocker)          { color = '#c0392b';      category = 'blocker'; }
         else                            { color = '#2980b9';      category = 'waiter'; }
+        const pos = positions.get(n.id) || { depth: 0, row: 0 };
         return {
           id: n.id, name: decorateSidLabel(n.id),
-          symbolSize: 16 + Math.min(36, n.samples.length * 3),
+          x: 80 + pos.depth * xGap,
+          y: 50 + pos.row * yGap,
+          symbolSize: 18 + Math.min(30, (n.samples.length + (children.get(n.id)?.size || 0)) * 2),
           itemStyle: { color },
           label: { show: true, fontSize: 10, position: 'right' },
           category,
@@ -606,10 +770,10 @@
           source: e.source, target: e.target,
           value: e.samples.length,
           label: {
-            show: true, fontSize: 9, color: '#444',
+            show: e.samples.length > 1, fontSize: 9, color: '#444',
             formatter: evLabel.length > 28 ? evLabel.slice(0,26)+'…' : evLabel
           },
-          lineStyle: { color: cmap.get(e.ck) || '#666', width: 1.5 + Math.min(4, e.samples.length*0.2), curveness: 0.12, opacity: 0.85 },
+          lineStyle: { color: cmap.get(e.ck) || '#666', width: 1.5 + Math.min(5, e.samples.length*0.22), curveness: 0.08, opacity: 0.82 },
           symbol: ['none', 'arrow'], symbolSize: [6, 9],
           _edge: e
         };
@@ -636,16 +800,15 @@
             }
           }
         },
-        legend: { data: [{name:'waiter'},{name:'chain'},{name:'blocker'}], bottom: 0, textStyle: { fontSize: 10 } },
+        legend: { show: false },
         series: [{
-          type: 'graph', layout: 'force',
+          type: 'graph', layout: 'none',
           categories: [
             { name: 'waiter', itemStyle: { color: '#2980b9' } },
             { name: 'chain',  itemStyle: { color: '#e67e22' } },
             { name: 'blocker',itemStyle: { color: '#c0392b' } }
           ],
-          roam: true, draggable: true, focusNodeAdjacency: true,
-          force: { repulsion: 280, edgeLength: [80, 180], gravity: 0.06, friction: 0.6 },
+          roam: true, draggable: false, focusNodeAdjacency: true,
           edgeLabel: { show: true, fontSize: 9 },
           edgeSymbol: ['none','arrow'], edgeSymbolSize: 8,
           data: nodes, links,
@@ -658,7 +821,7 @@
       treeChart.on('click', params => {
         if (params.dataType === 'edge') {
           const e = params.data._edge;
-          showSamples(e.samples, `Edge ${e.source} → ${e.target} at ${fmtTs(b)}`);
+          showSamples(e.samples, `Chain ${e.source} → ${e.target} at ${fmtTs(b)}`);
         } else if (params.data && params.data._node) {
           showSamples(params.data._node.samples, `Node ${params.data._node.id} at ${fmtTs(b)}`);
         }
@@ -812,6 +975,7 @@
         const end   = api.coord([api.value(2), yIdx]);
         const h = api.size([0, 1])[1] * 0.7;
         const wCount = api.value(3);
+        const bCount = api.value(4);
         const filled = wCount > 0;
         const rect = echarts.graphic.clipRectByRect({
           x: start[0], y: start[1] - h/2,
@@ -823,7 +987,7 @@
         return {
           type: 'rect', shape: rect,
           style: filled
-            ? { fill, opacity: 0.9 }
+            ? { fill, opacity: 0.9, stroke: bCount > 0 ? '#2c3e50' : fill, lineWidth: bCount > 0 ? 1.8 : 0 }
             : { fill: 'transparent', stroke: fill, lineWidth: 1.6 }
         };
       }
@@ -948,6 +1112,7 @@
 
     // ----- Wire up controls -----
     function renderAll() {
+      renderImpactSummary();
       renderOverview();
       renderSwimlane();
       renderTree();
