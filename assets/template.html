@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ASH Blocking Sessions Timeline</title>
+  <style>
+    :root {
+      --bg: #fafbfc;
+      --card: #ffffff;
+      --ink: #2c3e50;
+      --muted: #7a8694;
+      --line: #e1e4e8;
+      --accent: #2980b9;
+      --warn: #c0392b;
+      --chain: #e67e22;
+      --header-bg: #2c3e50;
+      --controls-bg: #34495e;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: var(--ink); background: var(--bg); font-size: 13px; }
+    header { background: var(--header-bg); color: #ecf0f1; padding: 14px 22px; }
+    header h1 { margin: 0; font-size: 18px; font-weight: 500; letter-spacing: 0.2px; }
+    header .meta { font-size: 12px; color: #bdc3c7; margin-top: 4px; }
+    .controls { background: var(--controls-bg); padding: 10px 22px; color: #ecf0f1; font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+    .controls label { display: inline-flex; align-items: center; gap: 6px; }
+    .controls select, .controls input[type=number] { padding: 3px 6px; border: 1px solid #4a5d70; border-radius: 3px; background: #fff; color: var(--ink); font-size: 12px; }
+    .controls input[type=number] { width: 60px; }
+    section { background: var(--card); margin: 16px 22px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    section h2 { font-size: 13px; margin: 0 0 10px 0; color: #555; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+    .scrubber { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+    .scrubber input[type=range] { flex: 1; }
+    .scrubber button { padding: 2px 10px; border: 1px solid #bbb; background: #f8f9fa; border-radius: 3px; cursor: pointer; font-size: 13px; }
+    .scrubber button:hover { background: #eef; }
+    .empty { color: var(--muted); font-style: italic; padding: 30px 16px; text-align: center; font-size: 13px; }
+    table.samples { font-size: 11.5px; border-collapse: collapse; width: 100%; margin-top: 6px; }
+    table.samples th, table.samples td { padding: 4px 7px; border-bottom: 1px solid #f0f0f0; text-align: left; vertical-align: top; }
+    table.samples th { background: #f5f5f5; font-weight: 600; color: #555; position: sticky; top: 0; }
+    table.samples tr:hover td { background: #fbfcfd; }
+    .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; background: #ecf0f1; color: #34495e; font-size: 11px; }
+    .pill.warn { background: #fadbd8; color: #922b21; }
+    .pill.chain { background: #fdebd0; color: #9c640c; }
+    .pill.ok { background: #d4efdf; color: #196f3d; }
+    .footnote { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>ASH Blocking Sessions Timeline</h1>
+    <div class="meta" id="meta">loading…</div>
+  </header>
+  <div class="controls">
+    <label>Bucket:
+      <select id="bucket">
+        <option value="10">10 s</option>
+        <option value="30">30 s</option>
+        <option value="60" selected>1 min</option>
+        <option value="300">5 min</option>
+        <option value="600">10 min</option>
+        <option value="3600">1 hour</option>
+      </select>
+    </label>
+    <label>Color by:
+      <select id="colorBy">
+        <option value="event" selected>Waiter event</option>
+        <option value="blocker">Blocker SID</option>
+        <option value="waitClass">Wait class</option>
+        <option value="user">Username</option>
+        <option value="prog">Program</option>
+        <option value="module">Module</option>
+        <option value="action">Action</option>
+      </select>
+    </label>
+    <label>Top-N waiters: <input id="topN" type="number" value="20" min="5" max="200"></label>
+    <fieldset id="idToggles" style="display:inline-flex; gap:10px; padding:2px 8px; margin:0; border:1px solid #4a5d70; border-radius:3px; align-items:center; color:#ecf0f1;">
+      <legend style="padding:0 4px; font-size:11px; color:#bdc3c7;">Show on labels</legend>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="user">user</label>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="prog">program</label>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="module">module</label>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="action">action</label>
+    </fieldset>
+    <span style="margin-left:auto; color:#bdc3c7;" id="counter"></span>
+  </div>
+  <section>
+    <h2>Overview — blocked sessions per bucket (stacked)</h2>
+    <div id="chart-overview" style="height: 220px"></div>
+    <div class="footnote">Bars stack the chosen "Color by" categories. Click a bar to drill the detail table below.</div>
+  </section>
+  <section>
+    <h2>Swimlane — per-session blocking timeline</h2>
+    <div id="chart-swimlane" style="height: 580px"></div>
+    <div class="footnote">Y-axis: top-N waiter SIDs (most-blocked first). Each bar segment = a continuous run of samples where the waiter was blocked by the same color-key. Hover for details.</div>
+  </section>
+  <section>
+    <h2>Blocking tree — waiter → blocker chains at a moment in time</h2>
+    <div class="scrubber">
+      <button id="treePlay" title="Auto-advance through buckets">&#9654;</button>
+      <input id="treeScrub" type="range" min="0" max="0" step="1" value="0">
+      <span id="treeTime" style="min-width: 170px; font-family: ui-monospace, SF Mono, Menlo, monospace;">—</span>
+      <span id="treeStat" style="color: var(--muted);"></span>
+    </div>
+    <div id="chart-tree" style="height: 560px"></div>
+    <div class="footnote">Arrows point waiter → blocker. Edge label = the event the waiter is on. Blue = pure waiter, orange = chain middle (both blocks and is blocked), red = pure blocker.</div>
+  </section>
+  <section>
+    <h2>Chain timeline — how blocking trees evolved across snapshots</h2>
+    <div id="chart-chain" style="height: 460px"></div>
+    <div class="footnote">Each row is one SID, grouped by its dominant root blocker (computed across the whole window for a stable layout) and indented by depth in the chain. Filled cells = SID was waiting in that bucket (OEM color by current "Color by"). Outlined cells = SID was only the blocker target in that bucket (so root SIDs are usually all-outlined, mid-chain SIDs are filled, leaves are filled). Click a cell to drill the detail table.</div>
+  </section>
+  <section>
+    <h2>Sample detail</h2>
+    <div id="sampleTableWrap"><div class="empty">Click an overview bar, swimlane segment, or tree edge to populate this.</div></div>
+  </section>
+  <script>
+    window.ASH_META = __META_JSON__;
+    window.ASH_DATA = __DATA_JSON__;
+  </script>
+  <script>
+  (function(){
+    "use strict";
+    const data = (window.ASH_DATA || []).slice();
+    const meta = window.ASH_META || {};
+
+    // Parse sample times once (Oracle emits "YYYY-MM-DDTHH24:MI:SS" — interpret as local).
+    for (const d of data) { d._tms = new Date(d.t).getTime(); }
+    data.sort((a,b) => a._tms - b._tms);
+
+    document.getElementById('meta').textContent =
+      `DB: ${meta.dbName||'?'} (dbid ${meta.dbId||'?'})  ·  Range: ${meta.beginTime||'?'} → ${meta.endTime||'?'}` +
+      (meta.conIdFilter ? `  ·  CON_ID=${meta.conIdFilter}` : '') +
+      `  ·  Blocking samples: ${data.length}  ·  Generated: ${meta.generatedAt||'?'}`;
+    document.getElementById('counter').textContent = `${data.length} samples`;
+
+    if (data.length === 0) {
+      for (const id of ['chart-overview','chart-swimlane','chart-tree','chart-chain']) {
+        const el = document.getElementById(id); if (el) el.innerHTML = '<div class="empty">No blocking samples found in this window.</div>';
+      }
+      return;
+    }
+
+    // ----- Controls -----
+    const bucketSel = document.getElementById('bucket');
+    const colorBySel = document.getElementById('colorBy');
+    const topNInput = document.getElementById('topN');
+
+    // ----- Charts -----
+    const overviewChart = echarts.init(document.getElementById('chart-overview'));
+    const swimlaneChart = echarts.init(document.getElementById('chart-swimlane'));
+    const treeChart = echarts.init(document.getElementById('chart-tree'));
+    const chainChart = echarts.init(document.getElementById('chart-chain'));
+    window.addEventListener('resize', () => {
+      overviewChart.resize(); swimlaneChart.resize(); treeChart.resize(); chainChart.resize();
+    });
+
+    // ----- Helpers -----
+    // Approximate Oracle Enterprise Manager (Top Activity) wait-class palette.
+    // Class names match V$EVENT_NAME.WAIT_CLASS exactly.
+    const OEM_WAIT_CLASS = {
+      'CPU':            '#4F8A2D',  // green
+      'Scheduler':      '#A0BC4D',  // olive / lime
+      'User I/O':       '#1F77B4',  // medium blue
+      'System I/O':     '#16548A',  // dark blue
+      'Concurrency':    '#8B2C2C',  // maroon
+      'Application':    '#C8001E',  // red
+      'Commit':         '#E78F37',  // orange
+      'Configuration':  '#7E398E',  // purple
+      'Administrative': '#D63384',  // magenta
+      'Network':        '#A0522D',  // sienna / tan
+      'Cluster':        '#F4D03F',  // yellow
+      'Queueing':       '#F9E79F',  // pale yellow
+      'Other':          '#C0A0C0'   // muted pink
+    };
+    // Fallback palette for keys that aren't wait classes/events (e.g. blocker SIDs).
+    const PALETTE = [
+      '#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc',
+      '#ff9f7f','#ffdb5c','#37a2da','#32c5e9','#67e0e3','#9fe6b8','#dda0dd','#87ceeb','#f4a460',
+      '#bdb76b','#cd5c5c'
+    ];
+
+    // event-name -> wait-class index, built lazily from the data.
+    let _evToWc = null;
+    function eventToWc(ev) {
+      if (_evToWc === null) {
+        _evToWc = new Map();
+        for (const d of data) if (d.ev) _evToWc.set(d.ev, d.wc || 'Other');
+      }
+      return _evToWc.get(ev) || 'Other';
+    }
+
+    // Deterministic 0..1 hash so the same event always gets the same shade.
+    function strHash01(s) {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+      return ((h >>> 0) % 1000) / 1000;
+    }
+
+    // Shift the lightness of a #rrggbb color by deltaL (in HSL 0..1 space).
+    function shiftLightness(hex, deltaL) {
+      const m = /^#?([0-9a-f]{6})$/i.exec(hex); if (!m) return hex;
+      const n = parseInt(m[1], 16);
+      let r = ((n>>16)&255)/255, g = ((n>>8)&255)/255, b = (n&255)/255;
+      const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
+      let h, s, l = (mx+mn)/2;
+      if (mx === mn) { h = 0; s = 0; }
+      else {
+        const d = mx - mn;
+        s = l > 0.5 ? d/(2-mx-mn) : d/(mx+mn);
+        switch (mx) {
+          case r: h = (g-b)/d + (g<b?6:0); break;
+          case g: h = (b-r)/d + 2; break;
+          case b: h = (r-g)/d + 4; break;
+        }
+        h /= 6;
+      }
+      l = Math.max(0.18, Math.min(0.82, l + deltaL));
+      const hue2rgb = (p,q,t) => {
+        if (t<0) t+=1; if (t>1) t-=1;
+        if (t<1/6) return p+(q-p)*6*t;
+        if (t<1/2) return q;
+        if (t<2/3) return p+(q-p)*(2/3-t)*6;
+        return p;
+      };
+      let rr, gg, bb;
+      if (s === 0) { rr = gg = bb = l; }
+      else {
+        const q = l < 0.5 ? l*(1+s) : l+s-l*s;
+        const p = 2*l - q;
+        rr = hue2rgb(p,q,h+1/3); gg = hue2rgb(p,q,h); bb = hue2rgb(p,q,h-1/3);
+      }
+      const to2 = v => Math.round(v*255).toString(16).padStart(2,'0');
+      return '#' + to2(rr) + to2(gg) + to2(bb);
+    }
+
+    // OEM-aware color for a category key.
+    // Returns null if the key isn't a wait-class/event (caller falls back to PALETTE).
+    function oemColorForKey(k) {
+      const mode = colorBySel.value;
+      if (mode === 'waitClass') {
+        return OEM_WAIT_CLASS[k] || OEM_WAIT_CLASS['Other'];
+      }
+      if (mode === 'event') {
+        const base = OEM_WAIT_CLASS[eventToWc(k)] || OEM_WAIT_CLASS['Other'];
+        // ±12% lightness shift per event so multiple events in the same class
+        // share hue but remain visually distinct.
+        return shiftLightness(base, (strHash01(k) - 0.5) * 0.24);
+      }
+      return null; // blocker SIDs, etc.
+    }
+
+    function colorKey(d) {
+      const mode = colorBySel.value;
+      if (mode === 'blocker')   return `${d.bInst||1}:${d.bSid}`;
+      if (mode === 'waitClass') return d.wc || 'Other';
+      if (mode === 'user')      return d.user || '(unknown user)';
+      if (mode === 'prog')      return d.prog || '(no program)';
+      if (mode === 'module')    return d.module || '(no module)';
+      if (mode === 'action')    return d.action || '(no action)';
+      return d.ev || '(no event)';
+    }
+
+    function waiterKey(d) { return `${d.inst||1}:${d.sid}`; }
+    function blockerKey(d) { return `${d.bInst||1}:${d.bSid}`; }
+
+    // Per-SID identifier resolver: walks the dataset once and picks the most
+    // frequent value of each identifier per SID (handles cases where a SID
+    // appears only as a blocker — uses the blocker-side enrichment fields).
+    let _identityCache = null;
+    function buildIdentityCache() {
+      const cache = new Map();
+      function bump(sid, field, val) {
+        if (!val) return;
+        if (!cache.has(sid)) cache.set(sid, {});
+        const e = cache.get(sid);
+        if (!e[field]) e[field] = new Map();
+        e[field].set(val, (e[field].get(val) || 0) + 1);
+      }
+      for (const d of data) {
+        const wk = waiterKey(d);
+        bump(wk, 'user',   d.user);
+        bump(wk, 'prog',   d.prog);
+        bump(wk, 'module', d.module);
+        bump(wk, 'action', d.action);
+        bump(wk, 'mach',   d.mach);
+        const bk = blockerKey(d);
+        bump(bk, 'user',   d.bUser);
+        bump(bk, 'prog',   d.bProg);
+        bump(bk, 'module', d.bMod);
+        bump(bk, 'action', d.bAct);
+        bump(bk, 'mach',   d.bMach);
+      }
+      // Collapse Map<value,count> → dominant value per field.
+      const result = new Map();
+      for (const [sid, fields] of cache) {
+        const out = {};
+        for (const [f, vs] of Object.entries(fields)) {
+          out[f] = [...vs.entries()].sort((a,b) => b[1] - a[1])[0][0];
+        }
+        result.set(sid, out);
+      }
+      return result;
+    }
+    function identityFor(sidKey) {
+      if (_identityCache === null) _identityCache = buildIdentityCache();
+      return _identityCache.get(sidKey) || {};
+    }
+    function activeIdToggles() {
+      return [...document.querySelectorAll('#idToggles input[type=checkbox]')]
+        .filter(cb => cb.checked).map(cb => cb.dataset.id);
+    }
+    // Appends selected identifier values to a base SID label, e.g. "1:287 · APP_ETL · ETL_LOAD".
+    function decorateSidLabel(sidKey) {
+      const sel = activeIdToggles();
+      if (sel.length === 0) return sidKey;
+      const id = identityFor(sidKey);
+      const parts = sel.map(k => id[k]).filter(Boolean);
+      return parts.length ? `${sidKey} · ${parts.join(' · ')}` : sidKey;
+    }
+
+    function fmtTs(ms) {
+      const dt = new Date(ms);
+      const pad = n => String(n).padStart(2,'0');
+      return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+    }
+
+    function bucketMs() { return (+bucketSel.value) * 1000; }
+
+    // Returns Map<string, {b, ck, n, samples[]}> keyed by `${b}|${ck}`.
+    function bucketize() {
+      const ms = bucketMs();
+      const groups = new Map();
+      for (const d of data) {
+        const b = Math.floor(d._tms / ms) * ms;
+        const ck = colorKey(d);
+        const key = `${b}|${ck}`;
+        let entry = groups.get(key);
+        if (!entry) { entry = {b, ck, n: 0, samples: []}; groups.set(key, entry); }
+        entry.n += 1;
+        entry.samples.push(d);
+      }
+      return groups;
+    }
+
+    function colorMapFor(keys) {
+      const sorted = [...keys].sort();
+      const m = new Map();
+      let palIdx = 0;
+      for (const k of sorted) {
+        const c = oemColorForKey(k);
+        m.set(k, c !== null ? c : PALETTE[palIdx++ % PALETTE.length]);
+      }
+      return m;
+    }
+
+    // ----- Overview stacked bar -----
+    function renderOverview() {
+      const groups = bucketize();
+      const buckets = [...new Set([...groups.values()].map(g => g.b))].sort((a,b)=>a-b);
+      const sums = new Map();
+      for (const g of groups.values()) sums.set(g.ck, (sums.get(g.ck)||0) + g.n);
+      const topCks = [...sums.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 12).map(x=>x[0]);
+      const topSet = new Set(topCks);
+      const cmap = colorMapFor(topCks);
+
+      const series = topCks.map(ck => ({
+        name: ck, type: 'bar', stack: 'total', barCategoryGap: '5%',
+        emphasis: { focus: 'series' },
+        itemStyle: { color: cmap.get(ck) },
+        data: buckets.map(b => [b, groups.get(`${b}|${ck}`)?.n || 0])
+      }));
+      const otherData = buckets.map(b => {
+        let n = 0;
+        for (const g of groups.values()) if (g.b === b && !topSet.has(g.ck)) n += g.n;
+        return [b, n];
+      });
+      if (otherData.some(d => d[1] > 0)) {
+        series.push({ name:'(other)', type:'bar', stack:'total', itemStyle:{color:'#bbb'}, data: otherData });
+      }
+
+      overviewChart.setOption({
+        tooltip: {
+          trigger: 'axis', axisPointer: { type: 'shadow' },
+          formatter: params => {
+            if (!params || !params.length) return '';
+            const b = params[0].value[0];
+            const total = params.reduce((s,p)=>s+(p.value[1]||0),0);
+            const lines = params
+              .filter(p => p.value[1] > 0)
+              .sort((a,b)=>b.value[1]-a.value[1])
+              .map(p => `<span style="display:inline-block;width:9px;height:9px;background:${p.color};margin-right:6px;border-radius:2px;"></span>${p.seriesName}: <b>${p.value[1]}</b>`);
+            return `<b>${fmtTs(b)}</b> (${bucketSel.options[bucketSel.selectedIndex].text}) — ${total} samples<br>${lines.join('<br>')}`;
+          }
+        },
+        legend: { bottom: 0, type: 'scroll', textStyle: { fontSize: 10 } },
+        grid: { left: 50, right: 20, top: 12, bottom: 40, containLabel: true },
+        xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
+        yAxis: { type: 'value', name: 'blocked samples', nameTextStyle:{fontSize:10}, minInterval: 1, axisLabel: { fontSize: 10 } },
+        series,
+        animation: false
+      }, true);
+
+      overviewChart.off('click');
+      overviewChart.on('click', params => {
+        const b = params.value[0];
+        const ck = params.seriesName;
+        const samples = ck === '(other)'
+          ? [...groups.values()].filter(g => g.b === b && !topSet.has(g.ck)).flatMap(g => g.samples)
+          : (groups.get(`${b}|${ck}`)?.samples || []);
+        showSamples(samples, `Bucket ${fmtTs(b)} · ${ck}`);
+      });
+    }
+
+    // ----- Swimlane (custom series Gantt) -----
+    function renderSwimlane() {
+      const ms = bucketMs();
+      const topN = Math.max(1, Math.min(200, +topNInput.value || 20));
+
+      const waiterCounts = new Map();
+      for (const d of data) {
+        const k = waiterKey(d);
+        waiterCounts.set(k, (waiterCounts.get(k)||0) + 1);
+      }
+      const topWaiters = [...waiterCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0, topN).map(x=>x[0]);
+      const topSet = new Set(topWaiters);
+
+      const byWaiter = new Map();
+      for (const d of data) {
+        const k = waiterKey(d);
+        if (!topSet.has(k)) continue;
+        if (!byWaiter.has(k)) byWaiter.set(k, []);
+        byWaiter.get(k).push(d);
+      }
+
+      // Build runs: merge adjacent samples (by bucket) with the same color key.
+      const runs = [];
+      for (const [waiter, samples] of byWaiter) {
+        samples.sort((a,b)=>a._tms - b._tms);
+        let cur = null;
+        for (const s of samples) {
+          const ck = colorKey(s);
+          const sb = Math.floor(s._tms / ms) * ms;
+          if (cur && cur.ck === ck && (sb - cur.lastBucket) <= ms) {
+            cur.end = sb + ms;
+            cur.lastBucket = sb;
+            cur.samples.push(s);
+          } else {
+            if (cur) runs.push(cur);
+            cur = { waiter, start: sb, end: sb + ms, ck, lastBucket: sb, samples: [s] };
+          }
+        }
+        if (cur) runs.push(cur);
+      }
+
+      const allCks = new Set(runs.map(r => r.ck));
+      const cmap = colorMapFor(allCks);
+
+      function renderItem(params, api) {
+        const yIdx = api.value(0);
+        const start = api.coord([api.value(1), yIdx]);
+        const end = api.coord([api.value(2), yIdx]);
+        const height = api.size([0, 1])[1] * 0.65;
+        const rect = echarts.graphic.clipRectByRect({
+          x: start[0], y: start[1] - height/2,
+          width: Math.max(1, end[0] - start[0]),
+          height
+        }, { x: params.coordSys.x, y: params.coordSys.y, width: params.coordSys.width, height: params.coordSys.height });
+        if (!rect) return;
+        return { type: 'rect', transition: ['shape'], shape: rect, style: { fill: api.visual('color'), opacity: 0.9 } };
+      }
+
+      const seriesData = runs.map(r => ({
+        name: r.ck,
+        value: [r.waiter, r.start, r.end, r.samples.length],
+        itemStyle: { color: cmap.get(r.ck) },
+        _run: r
+      }));
+
+      swimlaneChart.setOption({
+        tooltip: {
+          formatter: p => {
+            const r = p.data._run;
+            if (!r) return '';
+            const s = r.samples[0];
+            const evCounts = {};
+            for (const x of r.samples) evCounts[x.ev||'(none)'] = (evCounts[x.ev||'(none)']||0) + 1;
+            const evLines = Object.entries(evCounts).sort((a,b)=>b[1]-a[1]).slice(0,5)
+              .map(([e,n]) => `&nbsp;&nbsp;${e}: <b>${n}</b>`).join('<br>');
+            const blockers = new Set(r.samples.map(x => `${x.bInst||1}:${x.bSid},${x.bSer}`));
+            const id = identityFor(r.waiter);
+            const idLines = ['user','prog','module','action','mach']
+              .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+            return `<b>Waiter ${decorateSidLabel(r.waiter)}</b><br>` +
+                   `${fmtTs(r.start)} → ${fmtTs(r.end)} (${r.samples.length} samples)<br>` +
+                   (idLines ? `Identity:<br>${idLines}<br>` : '') +
+                   `Wait events:<br>${evLines}<br>` +
+                   `Blocker(s): ${[...blockers].slice(0,3).join(', ')}${blockers.size>3?'…':''}<br>` +
+                   `Color: ${r.ck}`;
+          }
+        },
+        grid: { left: 110, right: 20, top: 10, bottom: 30, containLabel: true },
+        xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
+        yAxis: {
+          type: 'category', data: topWaiters,
+          name: 'Waiter inst:sid', nameTextStyle:{fontSize:10},
+          axisLabel: { fontSize: 10, formatter: v => decorateSidLabel(v) },
+          inverse: true
+        },
+        series: [{
+          type: 'custom',
+          renderItem,
+          encode: { x: [1,2], y: 0 },
+          data: seriesData
+        }],
+        animation: false
+      }, true);
+
+      swimlaneChart.off('click');
+      swimlaneChart.on('click', params => {
+        const r = params.data && params.data._run;
+        if (r) showSamples(r.samples, `Waiter ${r.waiter} · ${fmtTs(r.start)}–${fmtTs(r.end)}`);
+      });
+    }
+
+    // ----- Blocking tree (force-directed graph) with scrubber -----
+    let treeBuckets = [];
+    let treeBucketMap = new Map();
+
+    function renderTree() {
+      const ms = bucketMs();
+      treeBucketMap = new Map();
+      for (const d of data) {
+        const b = Math.floor(d._tms / ms) * ms;
+        if (!treeBucketMap.has(b)) treeBucketMap.set(b, []);
+        treeBucketMap.get(b).push(d);
+      }
+      treeBuckets = [...treeBucketMap.keys()].sort((a,b)=>a-b);
+
+      const scrub = document.getElementById('treeScrub');
+      scrub.min = 0;
+      scrub.max = Math.max(0, treeBuckets.length - 1);
+
+      // Default to the bucket with most samples.
+      let bestIdx = 0, bestN = -1;
+      treeBuckets.forEach((b, i) => {
+        const n = treeBucketMap.get(b).length;
+        if (n > bestN) { bestN = n; bestIdx = i; }
+      });
+      scrub.value = bestIdx;
+      drawTreeAt(bestIdx);
+      scrub.oninput = () => drawTreeAt(+scrub.value);
+    }
+
+    function drawTreeAt(idx) {
+      const b = treeBuckets[idx];
+      if (b === undefined) {
+        treeChart.setOption({ title:{text:'No data',left:'center',top:'middle'}, series:[] }, true);
+        document.getElementById('treeTime').textContent = '—';
+        document.getElementById('treeStat').textContent = '';
+        return;
+      }
+      document.getElementById('treeTime').textContent = fmtTs(b);
+
+      const samples = treeBucketMap.get(b) || [];
+      document.getElementById('treeStat').textContent = `${samples.length} samples in ${bucketSel.options[bucketSel.selectedIndex].text} bucket`;
+
+      // Build nodes from union of waiters & blockers, and edges with event labels.
+      const nodeMap = new Map();
+      const edgeMap = new Map(); // key: w->b -> {label, samples[], ck}
+
+      for (const s of samples) {
+        const wk = waiterKey(s);
+        const bk = blockerKey(s);
+        if (!nodeMap.has(wk)) nodeMap.set(wk, { id: wk, samples: [], isWaiter: false, isBlocker: false });
+        if (!nodeMap.has(bk)) nodeMap.set(bk, { id: bk, samples: [], isWaiter: false, isBlocker: false });
+        nodeMap.get(wk).isWaiter = true;
+        nodeMap.get(wk).samples.push(s);
+        nodeMap.get(bk).isBlocker = true;
+
+        const ek = `${wk}|${bk}`;
+        let e = edgeMap.get(ek);
+        if (!e) { e = { source: wk, target: bk, samples: [], ck: colorKey(s), events: new Set() }; edgeMap.set(ek, e); }
+        e.samples.push(s);
+        e.events.add(s.ev || '');
+      }
+
+      const cmap = colorMapFor(new Set([...edgeMap.values()].map(e => e.ck)));
+
+      const nodes = [...nodeMap.values()].map(n => {
+        let color, category;
+        if (n.isWaiter && n.isBlocker) { color = 'var(--chain)'; category = 'chain'; }
+        else if (n.isBlocker)          { color = '#c0392b';      category = 'blocker'; }
+        else                            { color = '#2980b9';      category = 'waiter'; }
+        return {
+          id: n.id, name: decorateSidLabel(n.id),
+          symbolSize: 16 + Math.min(36, n.samples.length * 3),
+          itemStyle: { color },
+          label: { show: true, fontSize: 10, position: 'right' },
+          category,
+          _node: n
+        };
+      });
+
+      const links = [...edgeMap.values()].map(e => {
+        const evLabel = [...e.events].filter(x=>x).slice(0,1)[0] || '';
+        return {
+          source: e.source, target: e.target,
+          value: e.samples.length,
+          label: {
+            show: true, fontSize: 9, color: '#444',
+            formatter: evLabel.length > 28 ? evLabel.slice(0,26)+'…' : evLabel
+          },
+          lineStyle: { color: cmap.get(e.ck) || '#666', width: 1.5 + Math.min(4, e.samples.length*0.2), curveness: 0.12, opacity: 0.85 },
+          symbol: ['none', 'arrow'], symbolSize: [6, 9],
+          _edge: e
+        };
+      });
+
+      treeChart.setOption({
+        tooltip: {
+          formatter: p => {
+            if (p.dataType === 'edge') {
+              const e = p.data._edge;
+              return `<b>${e.source} → ${e.target}</b><br>` +
+                     `${e.samples.length} samples<br>` +
+                     `Events: ${[...e.events].filter(x=>x).join('<br>') || '(none)'}`;
+            } else {
+              const n = p.data._node;
+              if (!n) return p.name;
+              const role = (n.isWaiter && n.isBlocker) ? 'chain' : n.isBlocker ? 'blocker' : 'waiter';
+              const id = identityFor(n.id);
+              const idLines = ['user','prog','module','action','mach']
+                .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+              return `<b>${n.id}</b> · ${role}<br>` +
+                     `${n.samples.length} blocked samples in this bucket` +
+                     (idLines ? `<br>Identity:<br>${idLines}` : '');
+            }
+          }
+        },
+        legend: { data: [{name:'waiter'},{name:'chain'},{name:'blocker'}], bottom: 0, textStyle: { fontSize: 10 } },
+        series: [{
+          type: 'graph', layout: 'force',
+          categories: [
+            { name: 'waiter', itemStyle: { color: '#2980b9' } },
+            { name: 'chain',  itemStyle: { color: '#e67e22' } },
+            { name: 'blocker',itemStyle: { color: '#c0392b' } }
+          ],
+          roam: true, draggable: true, focusNodeAdjacency: true,
+          force: { repulsion: 280, edgeLength: [80, 180], gravity: 0.06, friction: 0.6 },
+          edgeLabel: { show: true, fontSize: 9 },
+          edgeSymbol: ['none','arrow'], edgeSymbolSize: 8,
+          data: nodes, links,
+          emphasis: { focus: 'adjacency', lineStyle: { width: 4 } }
+        }],
+        animation: false
+      }, true);
+
+      treeChart.off('click');
+      treeChart.on('click', params => {
+        if (params.dataType === 'edge') {
+          const e = params.data._edge;
+          showSamples(e.samples, `Edge ${e.source} → ${e.target} at ${fmtTs(b)}`);
+        } else if (params.data && params.data._node) {
+          showSamples(params.data._node.samples, `Node ${params.data._node.id} at ${fmtTs(b)}`);
+        }
+      });
+    }
+
+    // Play/pause
+    {
+      const btn = document.getElementById('treePlay');
+      let playing = false, timer = null;
+      btn.onclick = () => {
+        playing = !playing;
+        btn.innerHTML = playing ? '&#10073;&#10073;' : '&#9654;';
+        if (playing) {
+          timer = setInterval(() => {
+            const scrub = document.getElementById('treeScrub');
+            let v = (+scrub.value) + 1;
+            if (v > +scrub.max) v = 0;
+            scrub.value = v;
+            drawTreeAt(v);
+          }, 900);
+        } else {
+          clearInterval(timer); timer = null;
+        }
+      };
+    }
+
+    // ----- Chain timeline (Gantt) -----
+    // Builds a stable Y-axis by walking each SID's dominant parent across the
+    // entire window to its ultimate root, then groups + indents by depth.
+    function renderChainTimeline() {
+      const ms = bucketMs();
+
+      // 1) Dominant parent per SID across the entire window (stable chain structure).
+      const parentCounts = new Map();
+      for (const d of data) {
+        const wk = waiterKey(d), bk = blockerKey(d);
+        if (!parentCounts.has(wk)) parentCounts.set(wk, new Map());
+        const m = parentCounts.get(wk);
+        m.set(bk, (m.get(bk) || 0) + 1);
+      }
+      const parentOf = new Map();
+      for (const [sid, m] of parentCounts) {
+        parentOf.set(sid, [...m.entries()].sort((a,b) => b[1] - a[1])[0][0]);
+      }
+
+      // 2) Walk to ultimate root with cycle guard.
+      function rootAndDepth(sid) {
+        const seen = new Set([sid]);
+        let cur = sid, depth = 0;
+        while (parentOf.has(cur)) {
+          const p = parentOf.get(cur);
+          if (seen.has(p)) break;
+          seen.add(p); cur = p; depth++;
+        }
+        return { root: cur, depth };
+      }
+
+      // 3) Collect every SID that appears (as waiter or blocker) + activity.
+      const allSids = new Set();
+      const waitCount = new Map();
+      for (const d of data) {
+        const wk = waiterKey(d), bk = blockerKey(d);
+        allSids.add(wk); allSids.add(bk);
+        waitCount.set(wk, (waitCount.get(wk) || 0) + 1);
+      }
+      const sidInfo = new Map();
+      for (const sid of allSids) {
+        const { root, depth } = rootAndDepth(sid);
+        sidInfo.set(sid, { root, depth, act: waitCount.get(sid) || 0 });
+      }
+
+      // 4) Group by root, then build the visual row order.
+      const groups = new Map();
+      for (const [sid, info] of sidInfo) {
+        if (!groups.has(info.root)) groups.set(info.root, []);
+        groups.get(info.root).push(sid);
+      }
+      const groupTotal = root => groups.get(root).reduce((s, sid) => s + sidInfo.get(sid).act, 0);
+      const sortedRoots = [...groups.keys()].sort((a,b) => groupTotal(b) - groupTotal(a));
+
+      const yLabels = [];
+      const yMeta = [];
+      sortedRoots.forEach((root, gi) => {
+        if (gi > 0) {
+          yLabels.push('─ ─ ─ ─ ─ ─ ─ ─ ─ ─');
+          yMeta.push({ isSeparator: true });
+        }
+        const members = groups.get(root).slice().sort((a, b) => {
+          const ai = sidInfo.get(a), bi = sidInfo.get(b);
+          if (ai.depth !== bi.depth) return ai.depth - bi.depth;
+          return bi.act - ai.act;
+        });
+        for (const sid of members) {
+          const info = sidInfo.get(sid);
+          const isRoot = sid === root;
+          const decorated = decorateSidLabel(sid);
+          const label = isRoot
+            ? `◆ ${decorated}  (root)`
+            : `${'   '.repeat(info.depth)}↳ ${decorated}`;
+          yLabels.push(label);
+          yMeta.push({ sid, depth: info.depth, isRoot, root, isSeparator: false });
+        }
+      });
+
+      const sidToRow = new Map();
+      yMeta.forEach((m, i) => { if (!m.isSeparator) sidToRow.set(m.sid, i); });
+
+      // 5) Per (sid, bucket): aggregate waiter samples + blocker-target samples.
+      const cells = new Map();
+      for (const d of data) {
+        const b = Math.floor(d._tms / ms) * ms;
+        const wk = waiterKey(d), bk = blockerKey(d);
+        const ck = colorKey(d);
+
+        const wKey = `${wk}|${b}`;
+        if (!cells.has(wKey)) cells.set(wKey, { sid: wk, b, waiterSamples: [], blockerSamples: [], ckCounts: new Map() });
+        const wc = cells.get(wKey);
+        wc.waiterSamples.push(d);
+        wc.ckCounts.set(ck, (wc.ckCounts.get(ck) || 0) + 1);
+
+        const bKey = `${bk}|${b}`;
+        if (!cells.has(bKey)) cells.set(bKey, { sid: bk, b, waiterSamples: [], blockerSamples: [], ckCounts: new Map() });
+        const bc = cells.get(bKey);
+        bc.blockerSamples.push(d);
+        bc.ckCounts.set(ck, (bc.ckCounts.get(ck) || 0) + 1);
+      }
+
+      // 6) Color map covering every ck that shows up.
+      const allCks = new Set();
+      for (const c of cells.values()) for (const k of c.ckCounts.keys()) allCks.add(k);
+      const cmap = colorMapFor(allCks);
+
+      // 7) Build seriesData. value = [rowIdx, start, end, waiterN, blockerN]
+      const seriesData = [];
+      for (const c of cells.values()) {
+        const rowIdx = sidToRow.get(c.sid);
+        if (rowIdx === undefined) continue;
+        const dominantCk = [...c.ckCounts.entries()].sort((a,b) => b[1] - a[1])[0][0];
+        seriesData.push({
+          value: [rowIdx, c.b, c.b + ms, c.waiterSamples.length, c.blockerSamples.length],
+          itemStyle: { color: cmap.get(dominantCk) || '#999' },
+          _cell: c,
+          _ck: dominantCk
+        });
+      }
+
+      function renderItem(params, api) {
+        const yIdx = api.value(0);
+        const start = api.coord([api.value(1), yIdx]);
+        const end   = api.coord([api.value(2), yIdx]);
+        const h = api.size([0, 1])[1] * 0.7;
+        const wCount = api.value(3);
+        const filled = wCount > 0;
+        const rect = echarts.graphic.clipRectByRect({
+          x: start[0], y: start[1] - h/2,
+          width: Math.max(2, end[0] - start[0] - 1),
+          height: h
+        }, { x: params.coordSys.x, y: params.coordSys.y, width: params.coordSys.width, height: params.coordSys.height });
+        if (!rect) return;
+        const fill = api.visual('color');
+        return {
+          type: 'rect', shape: rect,
+          style: filled
+            ? { fill, opacity: 0.9 }
+            : { fill: 'transparent', stroke: fill, lineWidth: 1.6 }
+        };
+      }
+
+      chainChart.setOption({
+        tooltip: {
+          formatter: p => {
+            const c = p.data && p.data._cell;
+            if (!c) return '';
+            const role = c.waiterSamples.length > 0 && c.blockerSamples.length > 0 ? 'waiter + blocker'
+                       : c.waiterSamples.length > 0 ? 'waiter'
+                       : 'blocker only';
+            const evCounts = new Map();
+            for (const s of c.waiterSamples) evCounts.set(s.ev || '', (evCounts.get(s.ev || '') || 0) + 1);
+            const evLines = [...evCounts.entries()].sort((a,b) => b[1] - a[1]).slice(0, 4)
+              .map(([e, n]) => `&nbsp;&nbsp;${escapeHtml(e)}: <b>${n}</b>`).join('<br>');
+            const waiterIncoming = new Set(c.blockerSamples.map(s => waiterKey(s)));
+            const id = identityFor(c.sid);
+            const idLines = ['user','prog','module','action','mach']
+              .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+            return `<b>SID ${c.sid}</b> · ${role}<br>` +
+                   `${fmtTs(c.b)} (+${(ms/1000)|0}s)<br>` +
+                   (idLines ? `Identity:<br>${idLines}<br>` : '') +
+                   (c.waiterSamples.length ? `Waiting: <b>${c.waiterSamples.length}</b> samples<br>${evLines}<br>` : '') +
+                   (c.blockerSamples.length ? `Blocking ${waiterIncoming.size} waiter(s): ${c.blockerSamples.length} downstream samples<br>` : '') +
+                   `Color key: ${escapeHtml(p.data._ck)}`;
+          }
+        },
+        grid: { left: 150, right: 20, top: 12, bottom: 38, containLabel: true },
+        xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
+        yAxis: {
+          type: 'category',
+          data: yLabels,
+          inverse: true,
+          axisTick: { show: false },
+          axisLine: { show: false },
+          axisLabel: {
+            fontSize: 10,
+            fontFamily: 'ui-monospace, SF Mono, Menlo, Consolas, monospace',
+            formatter: (val, idx) => {
+              const m = yMeta[idx];
+              if (!m) return val;
+              if (m.isSeparator) return `{sep|${val}}`;
+              if (m.isRoot)      return `{root|${val}}`;
+              return `{ord|${val}}`;
+            },
+            rich: {
+              sep:  { color: '#bbb', fontStyle: 'italic' },
+              root: { color: '#2c3e50', fontWeight: 'bold' },
+              ord:  { color: '#34495e' }
+            }
+          },
+          splitLine: { show: true, lineStyle: { color: '#f3f4f6' } }
+        },
+        dataZoom: [
+          { type: 'inside', xAxisIndex: 0 },
+          { type: 'slider', xAxisIndex: 0, height: 14, bottom: 6 }
+        ],
+        series: [{
+          type: 'custom',
+          renderItem,
+          encode: { x: [1, 2], y: 0 },
+          data: seriesData
+        }],
+        animation: false
+      }, true);
+
+      chainChart.off('click');
+      chainChart.on('click', params => {
+        const c = params.data && params.data._cell;
+        if (!c) return;
+        const samples = c.waiterSamples.concat(c.blockerSamples);
+        showSamples(samples, `SID ${c.sid} @ ${fmtTs(c.b)} — ${samples.length} related samples`);
+      });
+    }
+
+    // ----- Sample detail table -----
+    function showSamples(samples, title) {
+      const wrap = document.getElementById('sampleTableWrap');
+      if (!samples || samples.length === 0) {
+        wrap.innerHTML = '<div class="empty">No samples.</div>';
+        return;
+      }
+      samples = samples.slice().sort((a,b)=>a._tms - b._tms);
+      const rows = samples.slice(0, 500).map(s => `
+        <tr>
+          <td>${fmtTs(s._tms)}</td>
+          <td>${s.inst||1}:${s.sid},${s.serial||''}</td>
+          <td><span class="pill ${s.bStatus==='VALID'?'warn':(s.bStatus==='NOT IN WAIT'?'chain':'')}">${s.bInst||1}:${s.bSid},${s.bSer||''} ${s.bStatus?'· '+s.bStatus:''}</span></td>
+          <td>${escapeHtml(s.ev||'')}</td>
+          <td>${escapeHtml(s.wc||'')}</td>
+          <td><code>${s.sqlId||''}</code></td>
+          <td>${escapeHtml(s.user||'')}</td>
+          <td>${escapeHtml(s.prog||'')}</td>
+          <td>${escapeHtml(s.module||'')}</td>
+          <td>${escapeHtml(s.action||'')}</td>
+          <td>${escapeHtml(s.mach||'')}</td>
+          <td>${escapeHtml(s.bEv||'')}${s.bState?'<br><small>'+s.bState+'</small>':''}</td>
+          <td><code>${s.bSqlId||''}</code></td>
+          <td>${s.conId||''}</td>
+        </tr>`).join('');
+      const truncNote = samples.length > 500 ? `<div class="footnote">Showing first 500 of ${samples.length} samples.</div>` : '';
+      wrap.innerHTML = `
+        <div style="font-size:12px;color:#555;margin-bottom:6px;"><b>${escapeHtml(title)}</b> — ${samples.length} samples</div>
+        <div style="max-height:380px;overflow:auto;">
+          <table class="samples">
+            <thead><tr>
+              <th>Time</th><th>Waiter</th><th>Blocker</th><th>Wait event</th><th>Class</th>
+              <th>SQL_ID</th><th>User</th><th>Program</th><th>Module</th><th>Action</th><th>Machine</th>
+              <th>Blocker doing</th><th>Blocker SQL</th><th>CON</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${truncNote}`;
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    // ----- Wire up controls -----
+    function renderAll() {
+      renderOverview();
+      renderSwimlane();
+      renderTree();
+      renderChainTimeline();
+    }
+    bucketSel.addEventListener('change', renderAll);
+    colorBySel.addEventListener('change', renderAll);
+    topNInput.addEventListener('change', renderAll);
+    document.querySelectorAll('#idToggles input[type=checkbox]')
+      .forEach(cb => cb.addEventListener('change', renderAll));
+    renderAll();
+  })();
+  </script>
+</body>
+</html>

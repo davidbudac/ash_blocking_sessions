@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+
+# Local Claude Code overrides (per-machine permissions etc.)
+.claude/settings.local.json
+
+# Editor scratch
+*.swp
+*~
