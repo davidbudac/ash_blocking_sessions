@@ -66,12 +66,13 @@ The IIFE structure (top → bottom in `assets/template.html`):
 
 1. **Identity helpers**: `colorKey(d)`, `waiterKey(d)`, `blockerKey(d)` derive the per-row category for color/grouping. `buildIdentityCache()` walks the dataset once, picks the *dominant* (most-frequent) value of each identifier (`user`, `prog`, `module`, `action`, `mach`) per SID, considering both the waiter row and the enriched blocker fields (`bUser`, `bProg`, `bMod`, `bAct`, `bMach`) — this is how a session that only appears as a blocker still gets a label. `decorateSidLabel(sid)` appends the user-selected identifier toggles to a SID for display.
 2. **OEM color palette**: `OEM_WAIT_CLASS` maps wait classes to OEM Top Activity colors. `oemColorForKey()` returns the class color (or, for events, the class color with a deterministic ±12% lightness shift from `shiftLightness()` + `strHash01()` so siblings in the same class share a hue but stay distinct).
-3. **Four charts**, each in its own `render*()` function:
-   - `renderOverview()` — stacked bars per time bucket.
-   - `renderSwimlane()` — top-N waiters as a custom-series Gantt; runs of same-color buckets are coalesced into single bars.
-   - `renderTree()` — force-graph snapshot at one bucket, scrubbable via `#treeScrub`. Three node colors: blue (waiter only), orange (chain middle: blocks **and** is blocked), red (blocker only).
-   - `renderChainTimeline()` — Gantt where each row is one SID. SIDs are grouped by walking each waiter's *dominant parent* across the entire window to its ultimate root (with a cycle guard), then indented by depth. Filled cells = SID was waiting that bucket; outlined cells = SID was only the blocker target. **Roots show up all-outlined**, leaves all-filled, mid-chain SIDs mixed.
-4. **`renderAll()`** wires the four charts to controls (`#bucket`, `#colorBy`, `#topN`, `#idToggles`).
+3. **Summary + four charts**, each in its own `render*()` function:
+   - `renderImpactSummary()` — root-cause summary tiles for top root blocker, peak blocked waiters, sample count, dominant workload, top wait event, and duration.
+   - `renderOverview()` — stacked bars per time bucket. The default color dimension is root blocker, not wait event, because many blocking windows collapse to a single wait event.
+   - `renderSwimlane()` — top-N waiters as a custom-series Gantt; rows are sorted by root blocker and impact, and runs of same-color buckets are coalesced into single bars.
+   - `renderTree()` — deterministic layered chain map at one bucket, scrubbable via `#treeScrub`. Edges draw root blocker → waiter so root causes read left-to-right. Three node colors: blue (waiter only), orange (chain middle: blocks **and** is blocked), red (root blocker).
+   - `renderChainTimeline()` — Gantt where each row is one SID. SIDs are grouped by walking each waiter's *dominant parent* across the entire window to its ultimate root (with a cycle guard), then indented by depth. Filled cells = SID was waiting that bucket; outlined cells = SID was blocking others. Mid-chain cells can be both filled and outlined.
+4. **`renderAll()`** wires the summary and charts to controls (`#bucket`, `#colorBy`, `#topN`, `#idToggles`).
 
 When changing the template:
 - Preserve the two placeholders `__META_JSON__` and `__DATA_JSON__` verbatim — the PL/SQL emitter REPLACEs them.
