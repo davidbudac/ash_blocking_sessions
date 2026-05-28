@@ -31,6 +31,35 @@ DECLARE
   l_src_offset  INTEGER := 1;
   l_lang_ctx    INTEGER := DBMS_LOB.DEFAULT_LANG_CTX;
   l_warning     INTEGER;
+
+  -- Substitute a placeholder token with a (possibly large) CLOB value.
+  -- SQL's REPLACE() caps the replacement arg at 32K (ORA-22828), so for data
+  -- JSON beyond 32K we splice via DBMS_LOB: prefix || value || suffix.
+  PROCEDURE replace_tag(io_lob IN OUT NOCOPY CLOB, p_tag IN VARCHAR2, p_val IN CLOB) IS
+    l_pos   PLS_INTEGER;
+    l_len   PLS_INTEGER;
+    l_tail  PLS_INTEGER;
+    l_tagln PLS_INTEGER := LENGTH(p_tag);
+    l_res   CLOB;
+  BEGIN
+    l_pos := DBMS_LOB.INSTR(io_lob, p_tag);
+    IF l_pos = 0 THEN RETURN; END IF;
+    l_len := DBMS_LOB.GETLENGTH(io_lob);
+    DBMS_LOB.CREATETEMPORARY(l_res, TRUE);
+    IF l_pos > 1 THEN
+      DBMS_LOB.COPY(l_res, io_lob, l_pos - 1, 1, 1);              -- prefix
+    END IF;
+    IF p_val IS NOT NULL AND DBMS_LOB.GETLENGTH(p_val) > 0 THEN
+      DBMS_LOB.APPEND(l_res, p_val);                             -- value
+    END IF;
+    l_tail := l_len - (l_pos + l_tagln - 1);
+    IF l_tail > 0 THEN
+      DBMS_LOB.COPY(l_res, io_lob, l_tail,
+                    DBMS_LOB.GETLENGTH(l_res) + 1, l_pos + l_tagln);  -- suffix
+    END IF;
+    DBMS_LOB.FREETEMPORARY(io_lob);
+    io_lob := l_res;
+  END replace_tag;
 BEGIN
   IF l_begin_arg IS NULL OR UPPER(l_begin_arg) IN ('AUTO','') THEN
     l_begin := SYSTIMESTAMP - INTERVAL '2' HOUR;
@@ -163,9 +192,10 @@ BEGIN
   );
   DBMS_LOB.FILECLOSE(bf);
 
-  -- 5. Substitute placeholders. REPLACE on CLOB works in 19c and returns a CLOB.
-  l_out := REPLACE(l_tmpl, '__META_JSON__', l_meta);
-  l_out := REPLACE(l_out,  '__DATA_JSON__', l_data);
+  -- 5. Substitute placeholders via DBMS_LOB (no 32K limit; see replace_tag).
+  replace_tag(l_tmpl, '__META_JSON__', l_meta);
+  replace_tag(l_tmpl, '__DATA_JSON__', l_data);
+  l_out := l_tmpl;
 
   -- 6. Write to disk via the REPORTS directory.
   DBMS_XSLPROCESSOR.CLOB2FILE(l_out, 'ASH_REPORTS', l_out_file, NLS_CHARSET_ID('AL32UTF8'));

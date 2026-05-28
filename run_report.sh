@@ -42,7 +42,12 @@ ssh -p "${SSH_PORT}" "${REMOTE_USER}@${HOST}" \
 
 echo "==> Pulling reports/ back"
 mkdir -p "${SCRIPT_DIR}/reports"
-rsync -az -e "ssh -p ${SSH_PORT}" "${REMOTE_USER}@${HOST}:${REMOTE_DIR}/reports/" "${SCRIPT_DIR}/reports/"
+# Only pull generated reports. ash_blocking_demo.html is a hand-maintained,
+# source-controlled offline copy (rich sample data inlined) — a stale copy
+# lingering on the host must NOT overwrite it.
+rsync -az -e "ssh -p ${SSH_PORT}" \
+  --exclude='ash_blocking_demo.html' \
+  "${REMOTE_USER}@${HOST}:${REMOTE_DIR}/reports/" "${SCRIPT_DIR}/reports/"
 
 LATEST="$(ls -1t "${SCRIPT_DIR}/reports/"*.html 2>/dev/null | head -n1 || true)"
 if [[ -n "${LATEST}" ]]; then

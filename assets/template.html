@@ -42,6 +42,48 @@
     .pill.chain { background: #fdebd0; color: #9c640c; }
     .pill.ok { background: #d4efdf; color: #196f3d; }
     .footnote { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+    /* Key-findings hero */
+    section.summary { border-left: 4px solid var(--warn); }
+    .kpis { display: flex; flex-wrap: wrap; gap: 10px; }
+    .kpi { flex: 1 1 120px; min-width: 110px; background: #f7f9fb; border: 1px solid var(--line); border-radius: 6px; padding: 9px 12px; }
+    .kpi .num { font-size: 23px; font-weight: 700; color: var(--ink); line-height: 1.05; }
+    .kpi .lbl { font-size: 10.5px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.4px; }
+    .kpi.alert { background: #fdf3f2; border-color: #f0c9c4; }
+    .kpi.alert .num { color: var(--warn); }
+    .findings { margin-top: 13px; font-size: 13px; line-height: 1.65; color: #3a4654; }
+    .findings .lead { font-size: 14px; margin-bottom: 4px; }
+    .findings b { color: var(--ink); }
+    .findings code { background: #eef1f4; padding: 0 4px; border-radius: 3px; font-size: 12px; }
+
+    /* Focused-sample banner */
+    .sample-sel { font-size: 12px; background: #eef5fb; border: 1px solid #cfe2f3; color: #2c5f86;
+      border-radius: 5px; padding: 7px 12px; margin-bottom: 8px; display: flex; align-items: center;
+      gap: 12px; flex-wrap: wrap; }
+    .sample-sel button { font-size: 11px; padding: 2px 10px; border: 1px solid #9cc3e0; background: #fff;
+      color: #2c5f86; border-radius: 4px; cursor: pointer; }
+    .sample-sel button:hover { background: #f0f7fc; }
+
+    /* Section group dividers */
+    .group-label { margin: 22px 22px 0; font-size: 11px; font-weight: 700; letter-spacing: 0.8px;
+      text-transform: uppercase; color: #8a97a5; display: flex; align-items: center; gap: 12px; }
+    .group-label::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+    /* Two-up chart grid (collapses to one column on narrow screens) */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+    .grid-2 > section { min-width: 0; }
+    @media (max-width: 980px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    /* Collapsible deep-dive */
+    details.explore { margin: 8px 22px 16px; }
+    details.explore > summary { cursor: pointer; list-style: none; background: var(--card);
+      border: 1px solid var(--line); border-radius: 5px; padding: 11px 16px; font-size: 12px;
+      font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: #555;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    details.explore > summary::before { content: "▸ "; color: var(--accent); }
+    details.explore[open] > summary::before { content: "▾ "; }
+    details.explore > summary::-webkit-details-marker { display: none; }
+    details.explore > section { margin-left: 0; margin-right: 0; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 </head>
@@ -82,35 +124,77 @@
     </fieldset>
     <span style="margin-left:auto; color:#bdc3c7;" id="counter"></span>
   </div>
-  <section>
-    <h2>Overview — blocked sessions per bucket (stacked)</h2>
-    <div id="chart-overview" style="height: 220px"></div>
-    <div class="footnote">Bars stack the chosen "Color by" categories. Click a bar to drill the detail table below.</div>
+  <!-- ① At-a-glance: the answer, before any chart -->
+  <section class="summary">
+    <h2>Key findings</h2>
+    <div class="kpis" id="kpis"></div>
+    <div class="findings" id="findings"></div>
   </section>
+
+  <!-- ② When -->
+  <div class="group-label">When — individual ASH samples</div>
   <section>
-    <h2>Swimlane — per-session blocking timeline</h2>
-    <div id="chart-swimlane" style="height: 580px"></div>
-    <div class="footnote">Y-axis: top-N waiter SIDs (most-blocked first). Each bar segment = a continuous run of samples where the waiter was blocked by the same color-key. Hover for details.</div>
+    <h2>Blocked sessions per ASH sample</h2>
+    <div id="sampleSel" class="sample-sel" style="display:none;"></div>
+    <div id="chart-overview" style="height: 260px"></div>
+    <div class="footnote">One bar = one ASH sample (≈10s). Bars stack the chosen "Color by" categories; drag the zoom slider for long windows. <b>Click a bar to focus that single sample</b> — the root-cause, tree, and deep-dive charts below filter to just that instant and the detail table lists its rows. Click the same bar again, or "Show all samples", to clear.</div>
   </section>
-  <section>
-    <h2>Blocking tree — waiter → blocker chains at a moment in time</h2>
-    <div class="scrubber">
-      <button id="treePlay" title="Auto-advance through buckets">&#9654;</button>
-      <input id="treeScrub" type="range" min="0" max="0" step="1" value="0">
-      <span id="treeTime" style="min-width: 170px; font-family: ui-monospace, SF Mono, Menlo, monospace;">—</span>
-      <span id="treeStat" style="color: var(--muted);"></span>
-    </div>
-    <div id="chart-tree" style="height: 560px"></div>
-    <div class="footnote">Arrows point waiter → blocker. Edge label = the event the waiter is on. Blue = pure waiter, orange = chain middle (both blocks and is blocked), red = pure blocker.</div>
-  </section>
-  <section>
-    <h2>Chain timeline — how blocking trees evolved across snapshots</h2>
-    <div id="chart-chain" style="height: 460px"></div>
-    <div class="footnote">Each row is one SID, grouped by its dominant root blocker (computed across the whole window for a stable layout) and indented by depth in the chain. Filled cells = SID was waiting in that bucket (OEM color by current "Color by"). Outlined cells = SID was only the blocker target in that bucket (so root SIDs are usually all-outlined, mid-chain SIDs are filled, leaves are filled). Click a cell to drill the detail table.</div>
-  </section>
+
+  <!-- ③ Who & how: root ranking + chain structure side by side -->
+  <div class="group-label">Root causes &amp; chain structure</div>
+  <div class="grid-2">
+    <section>
+      <h2>Top root causes</h2>
+      <div id="chart-roots" style="height: 300px"></div>
+      <div class="footnote">Every blocked sample is attributed to the <b>ultimate root</b> of its wait chain. Bars rank roots by total downstream blocked samples (≈ blocked session-seconds); trailing label is <code>samples · #waiters</code>. Click a bar to drill that root's whole chain.</div>
+    </section>
+    <section>
+      <h2>Blocking tree at peak contention</h2>
+      <div class="scrubber">
+        <button id="treePlay" title="Auto-advance through buckets">&#9654;</button>
+        <input id="treeScrub" type="range" min="0" max="0" step="1" value="0">
+        <span id="treeTime" style="min-width: 150px; font-family: ui-monospace, SF Mono, Menlo, monospace;">—</span>
+        <span id="treeStat" style="color: var(--muted);"></span>
+      </div>
+      <div id="chart-tree" style="height: 360px"></div>
+      <div class="footnote"><b>Root blockers anchor the left</b>, waiters cascade right by depth; arrows point waiter → blocker. <b>Node size = downstream impact</b>, so the true root cause is the biggest dot. Blue = waiter, orange = chain middle, red = root blocker. Drag / scroll to zoom; click to drill.</div>
+    </section>
+  </div>
+
+  <!-- ④ Deep dive: heavy timelines, collapsed by default to keep the page concise -->
+  <details class="explore">
+    <summary>Explore further — per-session timelines &amp; aggregate flow</summary>
+    <section>
+      <h2>Swimlane — per-session blocking timeline</h2>
+      <div id="chart-swimlane" style="height: 580px"></div>
+      <div class="footnote">Y-axis: top-N waiter SIDs (most-blocked first). Each bar segment = a continuous run of samples where the waiter was blocked by the same color-key. Hover for details.</div>
+    </section>
+    <section>
+      <h2>Chain timeline — how blocking trees evolved across snapshots</h2>
+      <div id="chart-chain" style="height: 460px"></div>
+      <div class="footnote">Each row is one SID, grouped by its dominant root blocker (computed across the whole window for a stable layout) and indented by depth in the chain. Filled cells = SID was waiting in that bucket (OEM color by current "Color by"). Outlined cells = SID was only the blocker target in that bucket (so root SIDs are usually all-outlined, mid-chain SIDs are filled, leaves are filled). Click a cell to drill the detail table.</div>
+    </section>
+    <section>
+      <h2>Aggregate blocking flow — Sankey (blocker → waiter)</h2>
+      <div style="display:flex; gap:14px; align-items:center; font-size:11px; color:#555; margin:4px 0 8px 0; flex-wrap:wrap;">
+        <label>Group by:
+          <select id="sankeyGroup" style="padding:2px 5px; border:1px solid #c1cad3; border-radius:3px; font-size:11px; background:#fff;">
+            <option value="sid" selected>SID</option>
+            <option value="user">User</option>
+            <option value="module">Module</option>
+            <option value="prog">Program</option>
+          </select>
+        </label>
+        <label>Top-N nodes: <input id="sankeyTopN" type="number" value="20" min="5" max="80" style="padding:2px 5px; border:1px solid #c1cad3; border-radius:3px; font-size:11px; width:54px;"></label>
+        <span style="color:#7a8694; font-size:10.5px;">Hover a link for sample counts. Hover a node to highlight adjacent flow.</span>
+      </div>
+      <div id="chart-sankey" style="height: 460px"></div>
+      <div class="footnote">Link width = number of blocking ASH samples; arrow direction = blocker → waiter. With SID grouping, multi-level chains (A → B → C) show as multiple columns. With User/Module/Program grouping, source and target are split into "(blocker)" / "(waiter)" buckets so intra-group flow (e.g. APP_BATCH blocking itself) stays readable. Top-N keeps the diagram legible on busy windows.</div>
+    </section>
+  </details>
   <section>
     <h2>Sample detail</h2>
-    <div id="sampleTableWrap"><div class="empty">Click an overview bar, swimlane segment, or tree edge to populate this.</div></div>
+    <div id="sampleTableWrap"><div class="empty">Click an ASH sample bar above, or a swimlane segment / tree node, to populate this.</div></div>
   </section>
   <script>
     window.ASH_META = __META_JSON__;
@@ -126,6 +210,16 @@
     for (const d of data) { d._tms = new Date(d.t).getTime(); }
     data.sort((a,b) => a._tms - b._tms);
 
+    // ----- Cross-filter state -----
+    // The "When" overview always plots the full dataset (one bar per ASH sample);
+    // clicking a bar focuses a single sample_time. `activeData` is the slice every
+    // OTHER chart renders from (full set when nothing is selected). Each filtered
+    // render function shadows `data` with `activeData` on its first line, so a single
+    // assignment here re-points them all without touching their bodies.
+    let activeData = data;       // what the root/tree/deep-dive charts render
+    let selectedT = null;        // focused sample_time (ms), or null for "all"
+    let overviewInterval = 10000;// ms between ASH samples (recomputed in renderOverview)
+
     document.getElementById('meta').textContent =
       `DB: ${meta.dbName||'?'} (dbid ${meta.dbId||'?'})  ·  Range: ${meta.beginTime||'?'} → ${meta.endTime||'?'}` +
       (meta.conIdFilter ? `  ·  CON_ID=${meta.conIdFilter}` : '') +
@@ -133,9 +227,11 @@
     document.getElementById('counter').textContent = `${data.length} samples`;
 
     if (data.length === 0) {
-      for (const id of ['chart-overview','chart-swimlane','chart-tree','chart-chain']) {
+      for (const id of ['chart-overview','chart-roots','chart-swimlane','chart-tree','chart-chain','chart-sankey']) {
         const el = document.getElementById(id); if (el) el.innerHTML = '<div class="empty">No blocking samples found in this window.</div>';
       }
+      const f = document.getElementById('findings');
+      if (f) f.innerHTML = '<div class="lead">No blocking samples in this window — no session was waiting on another.</div>';
       return;
     }
 
@@ -143,14 +239,18 @@
     const bucketSel = document.getElementById('bucket');
     const colorBySel = document.getElementById('colorBy');
     const topNInput = document.getElementById('topN');
+    const sankeyGroupSel = document.getElementById('sankeyGroup');
+    const sankeyTopNInput = document.getElementById('sankeyTopN');
 
     // ----- Charts -----
     const overviewChart = echarts.init(document.getElementById('chart-overview'));
+    const rootsChart = echarts.init(document.getElementById('chart-roots'));
     const swimlaneChart = echarts.init(document.getElementById('chart-swimlane'));
     const treeChart = echarts.init(document.getElementById('chart-tree'));
     const chainChart = echarts.init(document.getElementById('chart-chain'));
+    const sankeyChart = echarts.init(document.getElementById('chart-sankey'));
     window.addEventListener('resize', () => {
-      overviewChart.resize(); swimlaneChart.resize(); treeChart.resize(); chainChart.resize();
+      overviewChart.resize(); rootsChart.resize(); swimlaneChart.resize(); treeChart.resize(); chainChart.resize(); sankeyChart.resize();
     });
 
     // ----- Helpers -----
@@ -289,7 +389,6 @@
         bump(bk, 'action', d.bAct);
         bump(bk, 'mach',   d.bMach);
       }
-      // Collapse Map<value,count> → dominant value per field.
       const result = new Map();
       for (const [sid, fields] of cache) {
         const out = {};
@@ -308,7 +407,6 @@
       return [...document.querySelectorAll('#idToggles input[type=checkbox]')]
         .filter(cb => cb.checked).map(cb => cb.dataset.id);
     }
-    // Appends selected identifier values to a base SID label, e.g. "1:287 · APP_ETL · ETL_LOAD".
     function decorateSidLabel(sidKey) {
       const sel = activeIdToggles();
       if (sel.length === 0) return sidKey;
@@ -353,28 +451,54 @@
     }
 
     // ----- Overview stacked bar -----
+    // One bar per *individual ASH sample* (DBA_HIST ASH ≈ one row per session
+    // every 10s). Always plots the FULL dataset so you can pick any sample even
+    // while a focus is active. Clicking a bar focuses that sample_time and
+    // cross-filters every other chart (see applySelection).
     function renderOverview() {
-      const groups = bucketize();
-      const buckets = [...new Set([...groups.values()].map(g => g.b))].sort((a,b)=>a-b);
+      const byT = new Map();                       // tms -> Map(ck -> {n, samples[]})
+      for (const d of data) {
+        let e = byT.get(d._tms); if (!e) { e = new Map(); byT.set(d._tms, e); }
+        const ck = colorKey(d);
+        let c = e.get(ck); if (!c) { c = { n: 0, samples: [] }; e.set(ck, c); }
+        c.n++; c.samples.push(d);
+      }
+      const tms = [...byT.keys()].sort((a, b) => a - b);
+
+      // Median gap between samples → bar width + highlight-band width (default 10s).
+      if (tms.length > 1) {
+        const gaps = []; for (let i = 1; i < tms.length; i++) gaps.push(tms[i] - tms[i-1]);
+        gaps.sort((a, b) => a - b);
+        overviewInterval = gaps[Math.floor(gaps.length / 2)] || 10000;
+      }
+
       const sums = new Map();
-      for (const g of groups.values()) sums.set(g.ck, (sums.get(g.ck)||0) + g.n);
-      const topCks = [...sums.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 12).map(x=>x[0]);
+      for (const e of byT.values()) for (const [ck, c] of e) sums.set(ck, (sums.get(ck) || 0) + c.n);
+      const topCks = [...sums.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(x => x[0]);
       const topSet = new Set(topCks);
       const cmap = colorMapFor(topCks);
 
       const series = topCks.map(ck => ({
-        name: ck, type: 'bar', stack: 'total', barCategoryGap: '5%',
+        name: ck, type: 'bar', stack: 'total', barMaxWidth: 16,
         emphasis: { focus: 'series' },
         itemStyle: { color: cmap.get(ck) },
-        data: buckets.map(b => [b, groups.get(`${b}|${ck}`)?.n || 0])
+        data: tms.map(t => [t, byT.get(t).get(ck)?.n || 0])
       }));
-      const otherData = buckets.map(b => {
-        let n = 0;
-        for (const g of groups.values()) if (g.b === b && !topSet.has(g.ck)) n += g.n;
-        return [b, n];
+      const otherData = tms.map(t => {
+        let n = 0; for (const [ck, c] of byT.get(t)) if (!topSet.has(ck)) n += c.n; return [t, n];
       });
       if (otherData.some(d => d[1] > 0)) {
-        series.push({ name:'(other)', type:'bar', stack:'total', itemStyle:{color:'#bbb'}, data: otherData });
+        series.push({ name: '(other)', type: 'bar', stack: 'total', barMaxWidth: 16, itemStyle: { color: '#bbb' }, data: otherData });
+      }
+
+      // Highlight band over the focused sample (lives on series[0]).
+      if (series.length) {
+        series[0].markArea = {
+          silent: true,
+          itemStyle: { color: 'rgba(41,128,185,0.16)' },
+          data: selectedT == null ? []
+            : [[{ xAxis: selectedT - overviewInterval/2 }, { xAxis: selectedT + overviewInterval/2 }]]
+        };
       }
 
       overviewChart.setOption({
@@ -383,35 +507,88 @@
           formatter: params => {
             if (!params || !params.length) return '';
             const b = params[0].value[0];
-            const total = params.reduce((s,p)=>s+(p.value[1]||0),0);
+            const total = params.reduce((s, p) => s + (p.value[1] || 0), 0);
             const lines = params
               .filter(p => p.value[1] > 0)
-              .sort((a,b)=>b.value[1]-a.value[1])
+              .sort((a, b) => b.value[1] - a.value[1])
               .map(p => `<span style="display:inline-block;width:9px;height:9px;background:${p.color};margin-right:6px;border-radius:2px;"></span>${p.seriesName}: <b>${p.value[1]}</b>`);
-            return `<b>${fmtTs(b)}</b> (${bucketSel.options[bucketSel.selectedIndex].text}) — ${total} samples<br>${lines.join('<br>')}`;
+            return `<b>${fmtTs(b)}</b> · ASH sample — ${total} blocked row(s)<br>${lines.join('<br>')}` +
+                   `<br><span style="color:#888;">click to focus this sample</span>`;
           }
         },
-        legend: { bottom: 0, type: 'scroll', textStyle: { fontSize: 10 } },
-        grid: { left: 50, right: 20, top: 12, bottom: 40, containLabel: true },
+        legend: { top: 0, type: 'scroll', textStyle: { fontSize: 10 } },
+        grid: { left: 50, right: 20, top: 28, bottom: 44, containLabel: true },
         xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
-        yAxis: { type: 'value', name: 'blocked samples', nameTextStyle:{fontSize:10}, minInterval: 1, axisLabel: { fontSize: 10 } },
+        yAxis: { type: 'value', name: 'blocked rows', nameTextStyle: { fontSize: 10 }, minInterval: 1, axisLabel: { fontSize: 10 } },
+        dataZoom: [
+          { type: 'inside', xAxisIndex: 0 },
+          { type: 'slider', xAxisIndex: 0, height: 14, bottom: 6 }
+        ],
         series,
         animation: false
       }, true);
 
       overviewChart.off('click');
       overviewChart.on('click', params => {
-        const b = params.value[0];
-        const ck = params.seriesName;
-        const samples = ck === '(other)'
-          ? [...groups.values()].filter(g => g.b === b && !topSet.has(g.ck)).flatMap(g => g.samples)
-          : (groups.get(`${b}|${ck}`)?.samples || []);
-        showSamples(samples, `Bucket ${fmtTs(b)} · ${ck}`);
+        const t = params.value && params.value[0];
+        if (t == null) return;
+        applySelection(selectedT === t ? null : t);   // click focused bar again = clear
       });
+    }
+
+    // Re-point every cross-filtered chart at a single sample (or back to all),
+    // then refresh the detail table and the overview highlight band.
+    function applySelection(t) {
+      selectedT = t;
+      activeData = (t == null) ? data : data.filter(d => d._tms === t);
+      renderTopRoots();
+      renderSwimlane();
+      renderTree();
+      renderChainTimeline();
+      renderSankey();
+      highlightOverview();
+      updateSelectionBanner();
+      if (t == null) {
+        document.getElementById('sampleTableWrap').innerHTML =
+          '<div class="empty">Click an ASH sample bar above, or a swimlane segment / tree node, to populate this.</div>';
+      } else {
+        showSamples(activeData, `ASH sample @ ${fmtTs(t)}`);
+      }
+    }
+
+    // Cheap highlight update that preserves the overview's current zoom.
+    function highlightOverview() {
+      overviewChart.setOption({
+        series: [{
+          markArea: {
+            silent: true,
+            itemStyle: { color: 'rgba(41,128,185,0.16)' },
+            data: selectedT == null ? []
+              : [[{ xAxis: selectedT - overviewInterval/2 }, { xAxis: selectedT + overviewInterval/2 }]]
+          }
+        }]
+      });
+    }
+
+    function updateSelectionBanner() {
+      const el = document.getElementById('sampleSel');
+      if (!el) return;
+      if (selectedT == null) { el.style.display = 'none'; el.innerHTML = ''; return; }
+      const n = activeData.length;
+      const waiters = new Set(activeData.map(waiterKey)).size;
+      const blockers = new Set(activeData.map(blockerKey)).size;
+      el.style.display = 'flex';
+      el.innerHTML =
+        `<span>Focused on ASH sample <b>${fmtTs(selectedT)}</b> — <b>${n}</b> blocked row(s), ` +
+        `<b>${waiters}</b> waiting / <b>${blockers}</b> blocking session(s). ` +
+        `Charts below show only this sample.</span>` +
+        `<button type="button" id="sampleSelClear">Show all samples</button>`;
+      document.getElementById('sampleSelClear').onclick = () => applySelection(null);
     }
 
     // ----- Swimlane (custom series Gantt) -----
     function renderSwimlane() {
+      const data = activeData;   // cross-filter: full set, or one focused sample
       const ms = bucketMs();
       const topN = Math.max(1, Math.min(200, +topNInput.value || 20));
 
@@ -526,6 +703,7 @@
     let treeBucketMap = new Map();
 
     function renderTree() {
+      const data = activeData;   // cross-filter: full set, or one focused sample
       const ms = bucketMs();
       treeBucketMap = new Map();
       for (const d of data) {
@@ -563,9 +741,9 @@
       const samples = treeBucketMap.get(b) || [];
       document.getElementById('treeStat').textContent = `${samples.length} samples in ${bucketSel.options[bucketSel.selectedIndex].text} bucket`;
 
-      // Build nodes from union of waiters & blockers, and edges with event labels.
+      // Build nodes (union of waiters & blockers) and edges (waiter → blocker).
       const nodeMap = new Map();
-      const edgeMap = new Map(); // key: w->b -> {label, samples[], ck}
+      const edgeMap = new Map(); // key: w|b -> {source, target, samples[], ck, events:Map}
 
       for (const s of samples) {
         const wk = waiterKey(s);
@@ -578,38 +756,105 @@
 
         const ek = `${wk}|${bk}`;
         let e = edgeMap.get(ek);
-        if (!e) { e = { source: wk, target: bk, samples: [], ck: colorKey(s), events: new Set() }; edgeMap.set(ek, e); }
+        if (!e) { e = { source: wk, target: bk, samples: [], ck: colorKey(s), events: new Map() }; edgeMap.set(ek, e); }
         e.samples.push(s);
-        e.events.add(s.ev || '');
+        e.events.set(s.ev || '', (e.events.get(s.ev || '') || 0) + 1);
       }
 
+      // Pick each waiter's dominant blocker in this bucket so the graph is a
+      // clean forest. ASH gives one blocker per sample, but a waiter can appear
+      // against more than one blocker across a bucket — collapse to the most
+      // frequent so depth/impact are well defined.
+      const parentOf = new Map();                 // waiter -> blocker
+      {
+        const byWaiter = new Map();
+        for (const e of edgeMap.values()) {
+          if (!byWaiter.has(e.source)) byWaiter.set(e.source, new Map());
+          byWaiter.get(e.source).set(e.target, e.samples.length);
+        }
+        for (const [w, m] of byWaiter) {
+          parentOf.set(w, [...m.entries()].sort((a, b) => b[1] - a[1])[0][0]);
+        }
+      }
+      const childrenOf = new Map();               // blocker -> [waiters]
+      for (const [w, p] of parentOf) {
+        if (w === p) continue;
+        if (!childrenOf.has(p)) childrenOf.set(p, []);
+        childrenOf.get(p).push(w);
+      }
+
+      // Roots = nodes that never wait (no parent). Seed a fallback if a pure
+      // cycle leaves us with none.
+      let roots = [...nodeMap.keys()].filter(id => !parentOf.has(id));
+      if (roots.length === 0 && nodeMap.size) {
+        const inc = new Map();
+        for (const e of edgeMap.values()) inc.set(e.target, (inc.get(e.target) || 0) + e.samples.length);
+        roots = [([...inc.entries()].sort((a, b) => b[1] - a[1])[0] || [])[0] || [...nodeMap.keys()][0]];
+      }
+
+      // Tidy-tree layout + downstream impact in one post-order walk.
+      //   depth  = distance from a root (anchors the X column)
+      //   y      = leaf order; parents centre on their children (anchors the Y row)
+      //   impact = own blocked samples + everything stuck transitively behind it
+      const depthOf = new Map(), yOf = new Map(), impactOf = new Map();
+      let leafCursor = 0;
+      function visit(id, depth, seen) {
+        depthOf.set(id, Math.max(depth, depthOf.get(id) || 0));
+        const own = nodeMap.has(id) ? nodeMap.get(id).samples.length : 0;
+        const kids = (childrenOf.get(id) || []).filter(k => !seen.has(k));
+        if (kids.length === 0) {
+          const y = leafCursor++;
+          yOf.set(id, y); impactOf.set(id, own);
+          return { y, impact: own };
+        }
+        const next = new Set(seen); next.add(id);
+        let ySum = 0, impact = own;
+        for (const k of kids) { const r = visit(k, depth + 1, next); ySum += r.y; impact += r.impact; }
+        const y = ySum / kids.length;
+        yOf.set(id, y); impactOf.set(id, impact);
+        return { y, impact };
+      }
+      for (const r of roots) visit(r, 0, new Set([r]));
+      for (const id of nodeMap.keys()) {
+        if (!yOf.has(id)) { depthOf.set(id, 0); yOf.set(id, leafCursor++); impactOf.set(id, nodeMap.get(id).samples.length); }
+      }
+
+      const maxImpact = Math.max(1, ...impactOf.values());
       const cmap = colorMapFor(new Set([...edgeMap.values()].map(e => e.ck)));
+      const XGAP = 220, YGAP = 64;
 
       const nodes = [...nodeMap.values()].map(n => {
         let color, category;
-        if (n.isWaiter && n.isBlocker) { color = 'var(--chain)'; category = 'chain'; }
-        else if (n.isBlocker)          { color = '#c0392b';      category = 'blocker'; }
-        else                            { color = '#2980b9';      category = 'waiter'; }
+        if (n.isWaiter && n.isBlocker) { color = '#e67e22'; category = 'chain'; }
+        else if (n.isBlocker)          { color = '#c0392b'; category = 'blocker'; }
+        else                            { color = '#2980b9'; category = 'waiter'; }
+        const impact = impactOf.get(n.id) || 0;
+        const hasKids = (childrenOf.get(n.id) || []).length > 0;
         return {
           id: n.id, name: decorateSidLabel(n.id),
-          symbolSize: 16 + Math.min(36, n.samples.length * 3),
+          x: (depthOf.get(n.id) || 0) * XGAP,
+          y: (yOf.get(n.id) || 0) * YGAP,
+          symbolSize: 14 + 40 * Math.sqrt(impact / maxImpact),
           itemStyle: { color },
-          label: { show: true, fontSize: 10, position: 'right' },
+          label: { show: true, fontSize: 10, position: hasKids ? 'left' : 'right' },
           category,
-          _node: n
+          _node: n, _impact: impact
         };
       });
 
       const links = [...edgeMap.values()].map(e => {
-        const evLabel = [...e.events].filter(x=>x).slice(0,1)[0] || '';
+        const evTop = [...e.events.entries()].filter(x => x[0]).sort((a, b) => b[1] - a[1]);
+        const top = evTop.length ? evTop[0][0] : '';
+        const more = evTop.length > 1 ? ` +${evTop.length - 1}` : '';
+        const shown = (top.length > 22 ? top.slice(0, 20) + '…' : top) + more;
         return {
           source: e.source, target: e.target,
           value: e.samples.length,
           label: {
-            show: true, fontSize: 9, color: '#444',
-            formatter: evLabel.length > 28 ? evLabel.slice(0,26)+'…' : evLabel
+            show: true, fontSize: 9, color: '#555',
+            formatter: shown
           },
-          lineStyle: { color: cmap.get(e.ck) || '#666', width: 1.5 + Math.min(4, e.samples.length*0.2), curveness: 0.12, opacity: 0.85 },
+          lineStyle: { color: cmap.get(e.ck) || '#666', width: 1.5 + Math.min(4, e.samples.length*0.2), curveness: 0.06, opacity: 0.85 },
           symbol: ['none', 'arrow'], symbolSize: [6, 9],
           _edge: e
         };
@@ -620,32 +865,33 @@
           formatter: p => {
             if (p.dataType === 'edge') {
               const e = p.data._edge;
-              return `<b>${e.source} → ${e.target}</b><br>` +
+              const evLines = [...e.events.entries()].filter(x => x[0]).sort((a,b)=>b[1]-a[1])
+                .map(([ev,n]) => `&nbsp;&nbsp;${escapeHtml(ev)}: <b>${n}</b>`).join('<br>');
+              return `<b>${e.source} → ${e.target}</b> (waits on)<br>` +
                      `${e.samples.length} samples<br>` +
-                     `Events: ${[...e.events].filter(x=>x).join('<br>') || '(none)'}`;
+                     `Events:<br>${evLines || '&nbsp;&nbsp;(none)'}`;
             } else {
               const n = p.data._node;
               if (!n) return p.name;
-              const role = (n.isWaiter && n.isBlocker) ? 'chain' : n.isBlocker ? 'blocker' : 'waiter';
+              const role = (n.isWaiter && n.isBlocker) ? 'chain middle' : n.isBlocker ? 'root blocker' : 'waiter';
               const id = identityFor(n.id);
               const idLines = ['user','prog','module','action','mach']
                 .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
               return `<b>${n.id}</b> · ${role}<br>` +
-                     `${n.samples.length} blocked samples in this bucket` +
+                     `${n.samples.length} blocked samples here · <b>${p.data._impact}</b> stuck behind it` +
                      (idLines ? `<br>Identity:<br>${idLines}` : '');
             }
           }
         },
         legend: { data: [{name:'waiter'},{name:'chain'},{name:'blocker'}], bottom: 0, textStyle: { fontSize: 10 } },
         series: [{
-          type: 'graph', layout: 'force',
+          type: 'graph', layout: 'none',
           categories: [
             { name: 'waiter', itemStyle: { color: '#2980b9' } },
             { name: 'chain',  itemStyle: { color: '#e67e22' } },
             { name: 'blocker',itemStyle: { color: '#c0392b' } }
           ],
-          roam: true, draggable: true, focusNodeAdjacency: true,
-          force: { repulsion: 280, edgeLength: [80, 180], gravity: 0.06, friction: 0.6 },
+          roam: true, draggable: true,
           edgeLabel: { show: true, fontSize: 9 },
           edgeSymbol: ['none','arrow'], edgeSymbolSize: 8,
           data: nodes, links,
@@ -690,6 +936,7 @@
     // Builds a stable Y-axis by walking each SID's dominant parent across the
     // entire window to its ultimate root, then groups + indents by depth.
     function renderChainTimeline() {
+      const data = activeData;   // cross-filter: full set, or one focused sample
       const ms = bucketMs();
 
       // 1) Dominant parent per SID across the entire window (stable chain structure).
@@ -900,6 +1147,255 @@
       });
     }
 
+    // ----- Key findings: KPI tiles + plain-language summary -----
+    // Computes the "answer" once from the raw samples, independent of bucket size.
+    function renderSummary() {
+      const waiters = new Set(data.map(waiterKey));
+      const blockers = new Set(data.map(blockerKey));
+
+      // Dominant parent across the window → ultimate roots + chain depth.
+      const parentCounts = new Map();
+      for (const d of data) {
+        const wk = waiterKey(d), bk = blockerKey(d);
+        if (!parentCounts.has(wk)) parentCounts.set(wk, new Map());
+        const m = parentCounts.get(wk); m.set(bk, (m.get(bk) || 0) + 1);
+      }
+      const parentOf = new Map();
+      for (const [s, m] of parentCounts) parentOf.set(s, [...m.entries()].sort((a,b)=>b[1]-a[1])[0][0]);
+      function rd(sid) {
+        const seen = new Set([sid]); let cur = sid, depth = 0;
+        while (parentOf.has(cur)) { const p = parentOf.get(cur); if (seen.has(p)) break; seen.add(p); cur = p; depth++; }
+        return { root: cur, depth };
+      }
+      const roots = new Set(); let maxDepth = 0;
+      for (const s of new Set([...waiters, ...blockers])) { const { root, depth } = rd(s); roots.add(root); if (depth > maxDepth) maxDepth = depth; }
+
+      // Peak concurrency = most distinct waiters blocked at one sample_time.
+      const byTime = new Map();
+      for (const d of data) { if (!byTime.has(d.t)) byTime.set(d.t, new Set()); byTime.get(d.t).add(waiterKey(d)); }
+      let peak = 0, peakT = null;
+      for (const [t, set] of byTime) if (set.size > peak) { peak = set.size; peakT = t; }
+
+      // Roots ranked by downstream blocked samples (mirrors the Top-roots chart).
+      const byRoot = new Map();
+      for (const d of data) {
+        const r = rd(waiterKey(d)).root;
+        let e = byRoot.get(r); if (!e) { e = { n: 0, w: new Set(), ev: new Map() }; byRoot.set(r, e); }
+        e.n++; e.w.add(waiterKey(d)); if (d.ev) e.ev.set(d.ev, (e.ev.get(d.ev) || 0) + 1);
+      }
+      const topRoots = [...byRoot.entries()].map(([root, e]) => ({
+        root, n: e.n, w: e.w.size, ev: ([...e.ev.entries()].sort((a,b)=>b[1]-a[1])[0] || [])[0] || ''
+      })).sort((a,b) => b.n - a.n);
+
+      const kpis = [
+        { num: data.length,   lbl: 'Blocked samples' },
+        { num: waiters.size,  lbl: 'Waiting sessions' },
+        { num: blockers.size, lbl: 'Blocking sessions' },
+        { num: roots.size,    lbl: 'Wait chains' },
+        { num: maxDepth + 1,  lbl: 'Deepest chain (levels)' },
+        { num: peak,          lbl: 'Peak blocked at once', alert: peak >= 3 }
+      ];
+      document.getElementById('kpis').innerHTML = kpis.map(k =>
+        `<div class="kpi${k.alert ? ' alert' : ''}"><div class="num">${k.num}</div><div class="lbl">${k.lbl}</div></div>`).join('');
+
+      const lines = [];
+      const top = topRoots[0];
+      if (top) {
+        const id = identityFor(top.root);
+        const who = ['user','module','prog'].map(k => id[k]).filter(Boolean).slice(0, 2).join(' / ');
+        lines.push(`<div class="lead">Biggest root cause: <b>${top.root}</b>${who ? ` (${escapeHtml(who)})` : ''} — ` +
+                   `<b>${top.n}</b> blocked samples behind it across <b>${top.w}</b> waiter(s)` +
+                   `${top.ev ? `, mostly <code>${escapeHtml(top.ev)}</code>` : ''}.</div>`);
+      }
+      lines.push(`<div>Peak contention: <b>${peak}</b> session(s) blocked simultaneously` +
+                 `${peakT ? ` around <b>${fmtTs(new Date(peakT).getTime())}</b>` : ''}; ` +
+                 `deepest wait chain is <b>${maxDepth + 1}</b> level(s).</div>`);
+      if (topRoots.length > 1) {
+        const rest = topRoots.slice(1, 3).map(r => `<b>${r.root}</b> (${r.n})`).join(', ');
+        lines.push(`<div>Other notable roots: ${rest}.</div>`);
+      }
+      document.getElementById('findings').innerHTML = lines.join('');
+    }
+
+    // ----- Top root causes (aggregate over the whole window) -----
+    // Walk each waiter's dominant blocker to its ultimate root, attribute every
+    // blocked sample to that root, and rank roots by total downstream samples.
+    // This is the report's headline "who is actually responsible" answer.
+    function renderTopRoots() {
+      const data = activeData;   // cross-filter: full set, or one focused sample
+      const parentCounts = new Map();
+      for (const d of data) {
+        const wk = waiterKey(d), bk = blockerKey(d);
+        if (!parentCounts.has(wk)) parentCounts.set(wk, new Map());
+        const m = parentCounts.get(wk);
+        m.set(bk, (m.get(bk) || 0) + 1);
+      }
+      const parentOf = new Map();
+      for (const [sid, m] of parentCounts) parentOf.set(sid, [...m.entries()].sort((a,b)=>b[1]-a[1])[0][0]);
+      function rootOf(sid) {
+        const seen = new Set([sid]); let cur = sid;
+        while (parentOf.has(cur)) { const p = parentOf.get(cur); if (seen.has(p)) break; seen.add(p); cur = p; }
+        return cur;
+      }
+
+      const byRoot = new Map();                    // root -> { samples[], waiters:Set, sqlCounts:Map }
+      for (const d of data) {
+        const r = rootOf(waiterKey(d));
+        let e = byRoot.get(r);
+        if (!e) { e = { samples: [], waiters: new Set(), sqlCounts: new Map() }; byRoot.set(r, e); }
+        e.samples.push(d);
+        e.waiters.add(waiterKey(d));
+        if (blockerKey(d) === r && d.bSqlId) e.sqlCounts.set(d.bSqlId, (e.sqlCounts.get(d.bSqlId) || 0) + 1);
+      }
+
+      const ranked = [...byRoot.entries()].map(([root, e]) => ({
+        root, n: e.samples.length, waiters: e.waiters.size, samples: e.samples,
+        topSql: ([...e.sqlCounts.entries()].sort((a,b)=>b[1]-a[1])[0] || [])[0] || ''
+      })).sort((a,b) => b.n - a.n).slice(0, 10);
+
+      rootsChart.setOption({
+        tooltip: {
+          trigger: 'item',
+          formatter: p => {
+            const r = ranked[p.dataIndex]; if (!r) return '';
+            const id = identityFor(r.root);
+            const idLines = ['user','prog','module','action','mach']
+              .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+            return `<b>Root ${r.root}</b><br>` +
+                   `Downstream blocked samples: <b>${r.n}</b><br>` +
+                   `Distinct waiters behind it: <b>${r.waiters}</b>` +
+                   (r.topSql ? `<br>Top blocker SQL: <code>${escapeHtml(r.topSql)}</code>` : '') +
+                   (idLines ? `<br>Identity:<br>${idLines}` : '');
+          }
+        },
+        grid: { left: 8, right: 70, top: 8, bottom: 26, containLabel: true },
+        xAxis: { type: 'value', name: 'downstream blocked samples', nameLocation: 'middle', nameGap: 28,
+                 nameTextStyle: { fontSize: 10 }, axisLabel: { fontSize: 10 }, minInterval: 1 },
+        yAxis: {
+          type: 'category',
+          data: ranked.map(r => decorateSidLabel(r.root)),
+          inverse: true,
+          axisTick: { show: false },
+          axisLabel: { fontSize: 10, fontFamily: 'ui-monospace, SF Mono, Menlo, Consolas, monospace' }
+        },
+        series: [{
+          type: 'bar',
+          data: ranked.map(r => r.n),
+          barWidth: '62%',
+          itemStyle: { color: '#c0392b', borderRadius: [0, 3, 3, 0] },
+          label: {
+            show: true, position: 'right', fontSize: 10, color: '#555',
+            formatter: p => { const r = ranked[p.dataIndex]; return `${r.n} · ${r.waiters}w`; }
+          }
+        }],
+        animation: false
+      }, true);
+
+      rootsChart.off('click');
+      rootsChart.on('click', p => {
+        const r = ranked[p.dataIndex];
+        if (r) showSamples(r.samples, `Root ${r.root} — ${r.n} downstream blocked samples (${r.waiters} waiters)`);
+      });
+    }
+
+    // ----- Sankey: aggregate blocker → waiter flow -----
+    // Each ASH row contributes one unit of flow from blocker-side to waiter-side.
+    // Grouping by SID keeps multi-level chain depth (A → B → C lays out in 3 columns).
+    // Grouping by user/module/program splits each value into "(blocker)" and "(waiter)"
+    // sides so intra-group flow (e.g. APP_BATCH blocking APP_BATCH) doesn't collapse
+    // into a Sankey-illegal self-loop.
+    function renderSankey() {
+      const data = activeData;   // cross-filter: full set, or one focused sample
+      const mode = sankeyGroupSel.value;              // 'sid' | 'user' | 'module' | 'prog'
+      const topN = Math.max(5, Math.min(80, +sankeyTopNInput.value || 20));
+
+      function sideValue(d, which) {                  // which = 'w' (waiter) | 'b' (blocker)
+        if (mode === 'sid') return which === 'w' ? waiterKey(d) : blockerKey(d);
+        const sid = which === 'w' ? waiterKey(d) : blockerKey(d);
+        const id = identityFor(sid);
+        return id[mode] || '(unknown)';
+      }
+
+      // Aggregate per (src,dst). Track sample lists for tooltips.
+      const flow = new Map();                         // key -> { src, dst, n, evCounts:Map }
+      const SEP = ' ';
+      for (const d of data) {
+        let src = sideValue(d, 'b'), dst = sideValue(d, 'w');
+        if (mode !== 'sid') { src = src + ' (blocker)'; dst = dst + ' (waiter)'; }
+        if (src === dst) continue;                    // skip self-loops (rare in SID mode; impossible otherwise)
+        const k = src + SEP + dst;
+        let e = flow.get(k);
+        if (!e) { e = { src, dst, n: 0, evCounts: new Map() }; flow.set(k, e); }
+        e.n += 1;
+        if (d.ev) e.evCounts.set(d.ev, (e.evCounts.get(d.ev) || 0) + 1);
+      }
+
+      // Top-N by total throughput (in + out).
+      const nodeWeight = new Map();
+      for (const e of flow.values()) {
+        nodeWeight.set(e.src, (nodeWeight.get(e.src) || 0) + e.n);
+        nodeWeight.set(e.dst, (nodeWeight.get(e.dst) || 0) + e.n);
+      }
+      const keep = new Set(
+        [...nodeWeight.entries()].sort((a,b) => b[1] - a[1]).slice(0, topN).map(x => x[0])
+      );
+
+      const links = [];
+      for (const e of flow.values()) {
+        if (!keep.has(e.src) || !keep.has(e.dst)) continue;
+        const topEv = [...e.evCounts.entries()].sort((a,b) => b[1] - a[1])[0];
+        links.push({
+          source: e.src, target: e.dst, value: e.n,
+          _topEv: topEv ? `${topEv[0]} (${topEv[1]})` : null
+        });
+      }
+      const nodes = [...keep].map(name => ({ name }));
+
+      if (links.length === 0) {
+        sankeyChart.clear();
+        sankeyChart.setOption({
+          title: { text: 'No flow at this grouping', left: 'center', top: 'middle',
+                   textStyle: { color: '#999', fontSize: 12 } }
+        });
+        return;
+      }
+
+      // Color nodes: blockers (left side / suffix) in red-orange, waiters (right side) in blue.
+      // In SID mode we don't know which is which without an extra pass — fall back to a neutral palette.
+      function nodeColor(name) {
+        if (mode === 'sid') return '#5B7DA8';
+        if (name.endsWith('(blocker)')) return '#C0392B';
+        if (name.endsWith('(waiter)'))  return '#1F77B4';
+        return '#888';
+      }
+
+      sankeyChart.setOption({
+        tooltip: {
+          trigger: 'item',
+          formatter: p => {
+            if (p.dataType === 'edge') {
+              const ev = p.data._topEv ? `<br>Top event: ${escapeHtml(p.data._topEv)}` : '';
+              return `<b>${escapeHtml(p.data.source)}</b> &rarr; <b>${escapeHtml(p.data.target)}</b><br>` +
+                     `Samples: <b>${p.value}</b>${ev}`;
+            }
+            return `<b>${escapeHtml(p.name)}</b><br>Total samples touching this node: <b>${nodeWeight.get(p.name) || 0}</b>`;
+          }
+        },
+        series: [{
+          type: 'sankey',
+          data: nodes.map(n => ({ ...n, itemStyle: { color: nodeColor(n.name) } })),
+          links,
+          nodeWidth: 14,
+          nodeGap: 8,
+          layoutIterations: 32,
+          lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.5 },
+          label: { fontSize: 11, color: '#34495e' },
+          emphasis: { focus: 'adjacency', lineStyle: { opacity: 0.85 } }
+        }],
+        animation: false
+      }, true);
+    }
+
     // ----- Sample detail table -----
     function showSamples(samples, title) {
       const wrap = document.getElementById('sampleTableWrap');
@@ -948,16 +1444,26 @@
 
     // ----- Wire up controls -----
     function renderAll() {
+      renderSummary();
       renderOverview();
+      renderTopRoots();
       renderSwimlane();
       renderTree();
       renderChainTimeline();
+      renderSankey();
     }
     bucketSel.addEventListener('change', renderAll);
     colorBySel.addEventListener('change', renderAll);
     topNInput.addEventListener('change', renderAll);
+    sankeyGroupSel.addEventListener('change', renderSankey);
+    sankeyTopNInput.addEventListener('change', renderSankey);
     document.querySelectorAll('#idToggles input[type=checkbox]')
       .forEach(cb => cb.addEventListener('change', renderAll));
+    // Charts inside a collapsed <details> init at zero size — resize on first open.
+    document.querySelectorAll('details.explore').forEach(d =>
+      d.addEventListener('toggle', () => {
+        if (d.open) { swimlaneChart.resize(); chainChart.resize(); sankeyChart.resize(); }
+      }));
     renderAll();
   })();
   </script>
