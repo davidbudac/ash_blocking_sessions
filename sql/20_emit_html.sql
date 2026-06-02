@@ -110,6 +110,23 @@ BEGIN
   IF l_row_count = 0 THEN
     l_data := TO_CLOB('[]');
   ELSE
+    WITH ash AS (
+      -- Materialize the window's ASH rows into a temp segment first. Self-joining
+      -- DBA_HIST_ACTIVE_SESS_HISTORY (a complex, non-mergeable UNION ALL view)
+      -- directly with an ANSI outer join makes the optimizer need a ROWID for the
+      -- non-key-preserved view and raises ORA-01445. Joining the materialized set
+      -- to itself sidesteps that (and scans the big view only once). Keep ALL rows
+      -- in the window here (not just blocked ones) so blocker rows are present for
+      -- the b.* enrichment join below.
+      SELECT /*+ MATERIALIZE */
+             dbid, snap_id, sample_id, sample_time, instance_number,
+             session_id, session_serial#, blocking_inst_id, blocking_session,
+             blocking_session_serial#, blocking_session_status, event, wait_class,
+             session_state, sql_id, module, action, program, machine, user_id, con_id
+        FROM dba_hist_active_sess_history
+       WHERE sample_time BETWEEN l_begin AND l_end
+         AND (l_con_id IS NULL OR con_id = l_con_id)
+    )
     SELECT JSON_ARRAYAGG(
              JSON_OBJECT(
                't'       VALUE TO_CHAR(w.sample_time, 'YYYY-MM-DD"T"HH24:MI:SS'),
@@ -145,8 +162,8 @@ BEGIN
              RETURNING CLOB
            )
       INTO l_data
-      FROM dba_hist_active_sess_history w
-      LEFT JOIN dba_hist_active_sess_history b
+      FROM ash w
+      LEFT JOIN ash b
              ON b.dbid             = w.dbid
             AND b.snap_id          = w.snap_id
             AND b.sample_id        = w.sample_id
@@ -155,10 +172,8 @@ BEGIN
             AND b.session_serial#  = w.blocking_session_serial#
       LEFT JOIN dba_users u_w ON u_w.user_id = w.user_id
       LEFT JOIN dba_users u_b ON u_b.user_id = b.user_id
-     WHERE w.sample_time BETWEEN l_begin AND l_end
-       AND w.blocking_session IS NOT NULL
-       AND w.blocking_session_status IN ('VALID', 'NOT IN WAIT', 'GLOBAL')
-       AND (l_con_id IS NULL OR w.con_id = l_con_id);
+     WHERE w.blocking_session IS NOT NULL
+       AND w.blocking_session_status IN ('VALID', 'NOT IN WAIT', 'GLOBAL');
   END IF;
 
   -- 3. Meta JSON.
