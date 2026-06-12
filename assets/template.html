@@ -42,6 +42,24 @@
     .pill.chain { background: #fdebd0; color: #9c640c; }
     .pill.ok { background: #d4efdf; color: #196f3d; }
     .footnote { font-size: 11px; color: var(--muted); margin-top: 6px; }
+    /* Hierarchical blocker -> waiter list in the sample detail */
+    ul.chain-tree, ul.chain-tree ul { list-style: none; margin: 0; padding: 0; }
+    ul.chain-tree ul { margin-left: 10px; padding-left: 12px; border-left: 1px solid #e3e7ea; }
+    ul.chain-tree li { margin: 3px 0; }
+    .ct-node { display: flex; align-items: baseline; gap: 7px; padding: 4px 7px; border-radius: 6px; background: #fafbfc; border: 1px solid #eef1f3; }
+    .ct-node:hover { background: #f3f7fb; }
+    .ct-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; }
+    .ct-main { flex: 1 1 auto; min-width: 0; font-size: 12px; line-height: 1.45; }
+    .ct-sid { font-weight: 600; color: #2c3e50; }
+    .ct-role { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; padding: 0 5px; border-radius: 7px; }
+    .ct-role.root { background: #fadbd8; color: #922b21; }
+    .ct-role.mid  { background: #fdebd0; color: #9c640c; }
+    .ct-role.leaf { background: #d6eaf8; color: #1f618d; }
+    .ct-ident { color: #34495e; }
+    .ct-act { color: #555; }
+    .ct-meta { color: var(--muted); font-size: 11px; }
+    .ct-meta code { background: #eef1f3; padding: 0 4px; border-radius: 3px; }
+    .ct-wc { font-size: 10px; color: #7f8c8d; }
 
     /* Key-findings hero */
     section.summary { border-left: 4px solid var(--warn); }
@@ -117,16 +135,16 @@
     <label>Top-N waiters: <input id="topN" type="number" value="20" min="5" max="200"></label>
     <fieldset id="idToggles" style="display:inline-flex; gap:10px; padding:2px 8px; margin:0; border:1px solid #4a5d70; border-radius:3px; align-items:center; color:#ecf0f1;">
       <legend style="padding:0 4px; font-size:11px; color:#bdc3c7;">Show on labels</legend>
-      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="user">user</label>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="user" checked>user</label>
       <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="prog">program</label>
-      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="module">module</label>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="module" checked>module</label>
       <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="action">action</label>
     </fieldset>
     <span style="margin-left:auto; color:#bdc3c7;" id="counter"></span>
   </div>
   <!-- ① At-a-glance: the answer, before any chart -->
   <section class="summary">
-    <h2>Key findings</h2>
+    <h2>Key findings — whole window</h2>
     <div class="kpis" id="kpis"></div>
     <div class="findings" id="findings"></div>
   </section>
@@ -137,7 +155,7 @@
     <h2>Blocked sessions per ASH sample</h2>
     <div id="sampleSel" class="sample-sel" style="display:none;"></div>
     <div id="chart-overview" style="height: 260px"></div>
-    <div class="footnote">One bar = one ASH sample (≈10s). Bars stack the chosen "Color by" categories; drag the zoom slider for long windows. <b>Click a bar to focus that single sample</b> — the root-cause, tree, and deep-dive charts below filter to just that instant and the detail table lists its rows. Click the same bar again, or "Show all samples", to clear.</div>
+    <div class="footnote">One bar = one ASH sample (≈10s). Bars stack the chosen "Color by" categories; drag the zoom slider for long windows. <b>Click a bar to focus that single sample</b> — the root-cause, tree and Sankey charts filter to just that instant, the timelines mark it with a blue line, and the detail table lists its rows. Click the same bar again, or "Show all samples", to clear.</div>
   </section>
 
   <!-- ③ Who & how: root ranking + chain structure side by side -->
@@ -167,12 +185,12 @@
     <section>
       <h2>Swimlane — per-session blocking timeline</h2>
       <div id="chart-swimlane" style="height: 580px"></div>
-      <div class="footnote">Y-axis: top-N waiter SIDs (most-blocked first). Each bar segment = a continuous run of samples where the waiter was blocked by the same color-key. Hover for details.</div>
+      <div class="footnote">Y-axis: top-N waiter SIDs (most-blocked first). Each bar segment = a continuous run of samples where the waiter was blocked by the same color-key. Hover for details. Always shows the whole window; a blue line marks the focused sample when one is selected.</div>
     </section>
     <section>
       <h2>Chain timeline — how blocking trees evolved across snapshots</h2>
       <div id="chart-chain" style="height: 460px"></div>
-      <div class="footnote">Each row is one SID, grouped by its dominant root blocker (computed across the whole window for a stable layout) and indented by depth in the chain. Filled cells = SID was waiting in that bucket (OEM color by current "Color by"). Outlined cells = SID was only the blocker target in that bucket (so root SIDs are usually all-outlined, mid-chain SIDs are filled, leaves are filled). Click a cell to drill the detail table.</div>
+      <div class="footnote">Each row is one SID, grouped by its dominant root blocker (computed across the whole window for a stable layout) and indented by depth in the chain. Filled cells = SID was waiting in that bucket (OEM color by current "Color by"). Outlined cells = SID was only the blocker target in that bucket (so root SIDs are usually all-outlined, mid-chain SIDs are filled, leaves are filled). Click a cell to drill the detail table. Always shows the whole window; a blue line marks the focused sample when one is selected.</div>
     </section>
     <section>
       <h2>Aggregate blocking flow — Sankey (blocker → waiter)</h2>
@@ -189,7 +207,7 @@
         <span style="color:#7a8694; font-size:10.5px;">Hover a link for sample counts. Hover a node to highlight adjacent flow.</span>
       </div>
       <div id="chart-sankey" style="height: 460px"></div>
-      <div class="footnote">Link width = number of blocking ASH samples; arrow direction = blocker → waiter. With SID grouping, multi-level chains (A → B → C) show as multiple columns. With User/Module/Program grouping, source and target are split into "(blocker)" / "(waiter)" buckets so intra-group flow (e.g. APP_BATCH blocking itself) stays readable. Top-N keeps the diagram legible on busy windows.</div>
+      <div class="footnote">Link width = number of blocking ASH samples; arrow direction = blocker → waiter. With SID grouping, multi-level chains (A → B → C) show as multiple columns. With User/Module/Program grouping, source and target are split into "(blocker)" / "(waiter)" buckets so intra-group flow (e.g. APP_BATCH blocking itself) stays readable. Top-N keeps the diagram legible on busy windows. Node colors match the tree: red = root blocker, orange = blocks &amp; waits, blue = waiter.</div>
     </section>
   </details>
   <section>
@@ -210,6 +228,16 @@
     for (const d of data) { d._tms = new Date(d.t).getTime(); }
     data.sort((a,b) => a._tms - b._tms);
 
+    // Median gap between distinct sample times ≈ ASH cadence (~10s for DBA_HIST).
+    // Used to translate "samples" into approximate blocked session-time.
+    const SAMPLE_MS = (() => {
+      const ts = [...new Set(data.map(d => d._tms))].sort((a, b) => a - b);
+      if (ts.length < 2) return 10000;
+      const gaps = []; for (let i = 1; i < ts.length; i++) gaps.push(ts[i] - ts[i - 1]);
+      gaps.sort((a, b) => a - b);
+      return gaps[Math.floor(gaps.length / 2)] || 10000;
+    })();
+
     // ----- Cross-filter state -----
     // The "When" overview always plots the full dataset (one bar per ASH sample);
     // clicking a bar focuses a single sample_time. `activeData` is the slice every
@@ -218,7 +246,7 @@
     // assignment here re-points them all without touching their bodies.
     let activeData = data;       // what the root/tree/deep-dive charts render
     let selectedT = null;        // focused sample_time (ms), or null for "all"
-    let overviewInterval = 10000;// ms between ASH samples (recomputed in renderOverview)
+    let overviewInterval = SAMPLE_MS; // ms between ASH samples (recomputed in renderOverview)
 
     document.getElementById('meta').textContent =
       `DB: ${meta.dbName||'?'} (dbid ${meta.dbId||'?'})  ·  Range: ${meta.beginTime||'?'} → ${meta.endTime||'?'}` +
@@ -270,6 +298,65 @@
       'Cluster':        '#F4D03F',  // yellow
       'Queueing':       '#F9E79F',  // pale yellow
       'Other':          '#C0A0C0'   // muted pink
+    };
+    // Approximate Oracle EM colors for SPECIFIC common wait events. Each shade
+    // sits in its wait class's hue family (reds = Application, blues = I/O,
+    // maroons = Concurrency, purples = Configuration, yellows = Cluster, …) but
+    // is distinct so events stacked together stay legible. Keys match
+    // V$EVENT_NAME.NAME. Unknown events fall back to spreadWithinClass().
+    const OEM_WAIT_EVENT = {
+      // CPU (green)
+      'CPU':                                       '#4F8A2D',
+      'CPU + Wait for CPU':                        '#5C9E38',
+      // User I/O (blues)
+      'db file sequential read':                   '#1F77B4',
+      'db file scattered read':                    '#4A90C7',
+      'db file parallel read':                     '#2E6DA4',
+      'direct path read':                          '#5DADE2',
+      'direct path read temp':                     '#7FB3D5',
+      'direct path write':                         '#2874A6',
+      'direct path write temp':                    '#21618C',
+      'read by other session':                     '#85C1E9',
+      'Disk file operations I/O':                  '#34699A',
+      // System I/O (dark blue)
+      'db file parallel write':                    '#16548A',
+      'log file parallel write':                   '#1A5276',
+      'control file sequential read':              '#2E86C1',
+      'control file parallel write':               '#1B4F72',
+      // Commit (orange)
+      'log file sync':                             '#E78F37',
+      // Application (reds)
+      'enq: TX - row lock contention':             '#C8001E',
+      'enq: TM - contention':                      '#E8513A',
+      'enq: UL - contention':                      '#F0606F',
+      'enq: TX - contention':                      '#A30016',
+      'SQL*Net break/reset to client':             '#8B0012',
+      // Concurrency (maroons / rusts)
+      'buffer busy waits':                         '#8B2C2C',
+      'latch: cache buffers chains':               '#A84343',
+      'latch: shared pool':                        '#6E2020',
+      'library cache lock':                        '#B05A5A',
+      'library cache pin':                         '#C97B7B',
+      'cursor: pin S wait on X':                   '#5C1A1A',
+      'row cache lock':                            '#9C4040',
+      'enq: TX - index contention':                '#D35400',
+      // Configuration (purples)
+      'log file switch (checkpoint incomplete)':   '#7E398E',
+      'log file switch completion':                '#9B59B6',
+      'free buffer waits':                         '#6C3483',
+      'enq: HW - contention':                      '#A569BD',
+      'enq: TX - allocate ITL entry':              '#8E44AD',
+      // Cluster (yellows / golds)
+      'gc current block busy':                     '#F4D03F',
+      'gc cr block busy':                          '#F1C40F',
+      'gc buffer busy acquire':                    '#D4AC0D',
+      'gc buffer busy release':                    '#B7950B',
+      'gc current block 2-way':                    '#F7DC6F',
+      'gc cr block 2-way':                         '#F9E79F',
+      'gc current grant 2-way':                    '#CDA200',
+      // Network (sienna / tan)
+      'SQL*Net message from dblink':               '#A0522D',
+      'SQL*Net more data from client':             '#B5651D'
     };
     // Fallback palette for keys that aren't wait classes/events (e.g. blocker SIDs).
     const PALETTE = [
@@ -332,6 +419,43 @@
       return '#' + to2(rr) + to2(gg) + to2(bb);
     }
 
+    // #rrggbb -> {h,s,l} (each 0..1) and back, for spreading event colors.
+    function hexToHsl(hex) {
+      const m = /^#?([0-9a-f]{6})$/i.exec(hex); if (!m) return null;
+      const n = parseInt(m[1], 16);
+      let r = ((n>>16)&255)/255, g = ((n>>8)&255)/255, b = (n&255)/255;
+      const mx = Math.max(r,g,b), mn = Math.min(r,g,b); let h, s, l = (mx+mn)/2;
+      if (mx === mn) { h = 0; s = 0; }
+      else {
+        const d = mx - mn; s = l > 0.5 ? d/(2-mx-mn) : d/(mx+mn);
+        switch (mx) { case r: h=(g-b)/d+(g<b?6:0); break; case g: h=(b-r)/d+2; break; case b: h=(r-g)/d+4; break; }
+        h /= 6;
+      }
+      return { h, s, l };
+    }
+    function hslToHex(h, s, l) {
+      h = ((h % 1) + 1) % 1;
+      const hue2rgb = (p,q,t) => { if (t<0) t+=1; if (t>1) t-=1;
+        if (t<1/6) return p+(q-p)*6*t; if (t<1/2) return q; if (t<2/3) return p+(q-p)*(2/3-t)*6; return p; };
+      let r, g, b;
+      if (s === 0) { r = g = b = l; }
+      else { const q = l < 0.5 ? l*(1+s) : l+s-l*s, p = 2*l - q;
+             r = hue2rgb(p,q,h+1/3); g = hue2rgb(p,q,h); b = hue2rgb(p,q,h-1/3); }
+      const to2 = v => Math.round(Math.max(0,Math.min(1,v))*255).toString(16).padStart(2,'0');
+      return '#' + to2(r) + to2(g) + to2(b);
+    }
+    // Spread an unknown event's color around its wait-class base: rotate hue and
+    // shift lightness/saturation deterministically per event name, so several
+    // events in the same class get clearly distinct (but still class-tinted) shades.
+    function spreadWithinClass(base, key) {
+      const hsl = hexToHsl(base); if (!hsl) return base;
+      const a = strHash01(key), b = strHash01(key + '~l'), c = strHash01(key + '~s');
+      const h = hsl.h + (a - 0.5) * 0.14;                                  // ±~25° hue
+      const l = Math.max(0.30, Math.min(0.74, hsl.l + (b - 0.5) * 0.34));  // wide lightness
+      const s = Math.max(0.35, Math.min(0.95, hsl.s * (0.85 + c * 0.40))); // vary saturation
+      return hslToHex(h, s, l);
+    }
+
     // OEM-aware color for a category key.
     // Returns null if the key isn't a wait-class/event (caller falls back to PALETTE).
     function oemColorForKey(k) {
@@ -340,10 +464,11 @@
         return OEM_WAIT_CLASS[k] || OEM_WAIT_CLASS['Other'];
       }
       if (mode === 'event') {
+        // Prefer an exact OEM event color; otherwise spread widely within the
+        // event's wait-class hue family so siblings stay clearly distinct.
+        if (OEM_WAIT_EVENT[k]) return OEM_WAIT_EVENT[k];
         const base = OEM_WAIT_CLASS[eventToWc(k)] || OEM_WAIT_CLASS['Other'];
-        // ±12% lightness shift per event so multiple events in the same class
-        // share hue but remain visually distinct.
-        return shiftLightness(base, (strHash01(k) - 0.5) * 0.24);
+        return spreadWithinClass(base, k);
       }
       return null; // blocker SIDs, etc.
     }
@@ -419,6 +544,15 @@
       const dt = new Date(ms);
       const pad = n => String(n).padStart(2,'0');
       return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+    }
+
+    function fmtDur(sec) {
+      sec = Math.round(sec);
+      if (sec < 60) return `${sec}s`;
+      const m = Math.floor(sec / 60), s = sec % 60;
+      if (m < 60) return s ? `${m}m ${s}s` : `${m}m`;
+      const h = Math.floor(m / 60), mm = m % 60;
+      return mm ? `${h}h ${mm}m` : `${h}h`;
     }
 
     function bucketMs() { return (+bucketSel.value) * 1000; }
@@ -512,14 +646,14 @@
               .filter(p => p.value[1] > 0)
               .sort((a, b) => b.value[1] - a.value[1])
               .map(p => `<span style="display:inline-block;width:9px;height:9px;background:${p.color};margin-right:6px;border-radius:2px;"></span>${p.seriesName}: <b>${p.value[1]}</b>`);
-            return `<b>${fmtTs(b)}</b> · ASH sample — ${total} blocked row(s)<br>${lines.join('<br>')}` +
+            return `<b>${fmtTs(b)}</b> · ASH sample — ${total} blocked session(s)<br>${lines.join('<br>')}` +
                    `<br><span style="color:#888;">click to focus this sample</span>`;
           }
         },
         legend: { top: 0, type: 'scroll', textStyle: { fontSize: 10 } },
         grid: { left: 50, right: 20, top: 28, bottom: 44, containLabel: true },
         xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
-        yAxis: { type: 'value', name: 'blocked rows', nameTextStyle: { fontSize: 10 }, minInterval: 1, axisLabel: { fontSize: 10 } },
+        yAxis: { type: 'value', name: 'blocked sessions', nameTextStyle: { fontSize: 10 }, minInterval: 1, axisLabel: { fontSize: 10 } },
         dataZoom: [
           { type: 'inside', xAxisIndex: 0 },
           { type: 'slider', xAxisIndex: 0, height: 14, bottom: 6 }
@@ -574,21 +708,21 @@
       const el = document.getElementById('sampleSel');
       if (!el) return;
       if (selectedT == null) { el.style.display = 'none'; el.innerHTML = ''; return; }
-      const n = activeData.length;
       const waiters = new Set(activeData.map(waiterKey)).size;
       const blockers = new Set(activeData.map(blockerKey)).size;
       el.style.display = 'flex';
       el.innerHTML =
-        `<span>Focused on ASH sample <b>${fmtTs(selectedT)}</b> — <b>${n}</b> blocked row(s), ` +
-        `<b>${waiters}</b> waiting / <b>${blockers}</b> blocking session(s). ` +
-        `Charts below show only this sample.</span>` +
+        `<span>Focused on ASH sample <b>${fmtTs(selectedT)}</b> — <b>${waiters}</b> blocked session(s), ` +
+        `<b>${blockers}</b> blocking. Root-cause, tree and Sankey charts filter to this instant; ` +
+        `the timelines mark it with a blue line; the detail table lists its rows.</span>` +
         `<button type="button" id="sampleSelClear">Show all samples</button>`;
       document.getElementById('sampleSelClear').onclick = () => applySelection(null);
     }
 
     // ----- Swimlane (custom series Gantt) -----
     function renderSwimlane() {
-      const data = activeData;   // cross-filter: full set, or one focused sample
+      // Always plots the FULL window — a single focused sample would just stretch
+      // into meaningless full-width bars. The focused instant is marked with a line.
       const ms = bucketMs();
       const topN = Math.max(1, Math.min(200, +topNInput.value || 20));
 
@@ -599,6 +733,12 @@
       }
       const topWaiters = [...waiterCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0, topN).map(x=>x[0]);
       const topSet = new Set(topWaiters);
+
+      // One labelled lane per waiter — grow the canvas instead of letting ECharts
+      // auto-skip y-axis labels, which makes lanes look like they were dropped.
+      const swimEl = document.getElementById('chart-swimlane');
+      const swimH = Math.max(220, Math.min(1400, topWaiters.length * 26 + 70));
+      if (swimEl.style.height !== swimH + 'px') { swimEl.style.height = swimH + 'px'; swimlaneChart.resize(); }
 
       const byWaiter = new Map();
       for (const d of data) {
@@ -678,15 +818,20 @@
         xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
         yAxis: {
           type: 'category', data: topWaiters,
-          name: 'Waiter inst:sid', nameTextStyle:{fontSize:10},
-          axisLabel: { fontSize: 10, formatter: v => decorateSidLabel(v) },
+          axisLabel: { fontSize: 10, interval: 0, formatter: v => decorateSidLabel(v) },
           inverse: true
         },
         series: [{
           type: 'custom',
           renderItem,
           encode: { x: [1,2], y: 0 },
-          data: seriesData
+          data: seriesData,
+          markLine: {
+            silent: true, symbol: 'none', animation: false,
+            data: selectedT == null ? [] : [{ xAxis: selectedT }],
+            lineStyle: { color: '#2980b9', width: 2, type: 'solid', opacity: 0.85 },
+            label: { show: true, position: 'insideEndTop', formatter: 'focused sample', fontSize: 9, color: '#2980b9' }
+          }
         }],
         animation: false
       }, true);
@@ -821,12 +966,13 @@
 
       const maxImpact = Math.max(1, ...impactOf.values());
       const cmap = colorMapFor(new Set([...edgeMap.values()].map(e => e.ck)));
-      const XGAP = 220, YGAP = 64;
+      // Wider columns when identity toggles lengthen the node labels.
+      const XGAP = activeIdToggles().length ? 320 : 220, YGAP = 64;
 
       const nodes = [...nodeMap.values()].map(n => {
         let color, category;
-        if (n.isWaiter && n.isBlocker) { color = '#e67e22'; category = 'chain'; }
-        else if (n.isBlocker)          { color = '#c0392b'; category = 'blocker'; }
+        if (n.isWaiter && n.isBlocker) { color = '#e67e22'; category = 'blocks & waits'; }
+        else if (n.isBlocker)          { color = '#c0392b'; category = 'root blocker'; }
         else                            { color = '#2980b9'; category = 'waiter'; }
         const impact = impactOf.get(n.id) || 0;
         const hasKids = (childrenOf.get(n.id) || []).length > 0;
@@ -850,10 +996,9 @@
         return {
           source: e.source, target: e.target,
           value: e.samples.length,
-          label: {
-            show: true, fontSize: 9, color: '#555',
-            formatter: shown
-          },
+          // Event labels only on hover — always-on labels collide badly at fan-in.
+          label: { show: false, fontSize: 9, color: '#555', formatter: shown },
+          emphasis: { label: { show: true } },
           lineStyle: { color: cmap.get(e.ck) || '#666', width: 1.5 + Math.min(4, e.samples.length*0.2), curveness: 0.06, opacity: 0.85 },
           symbol: ['none', 'arrow'], symbolSize: [6, 9],
           _edge: e
@@ -883,16 +1028,16 @@
             }
           }
         },
-        legend: { data: [{name:'waiter'},{name:'chain'},{name:'blocker'}], bottom: 0, textStyle: { fontSize: 10 } },
+        legend: { data: [{name:'waiter'},{name:'blocks & waits'},{name:'root blocker'}], bottom: 0, textStyle: { fontSize: 10 } },
         series: [{
           type: 'graph', layout: 'none',
           categories: [
             { name: 'waiter', itemStyle: { color: '#2980b9' } },
-            { name: 'chain',  itemStyle: { color: '#e67e22' } },
-            { name: 'blocker',itemStyle: { color: '#c0392b' } }
+            { name: 'blocks & waits', itemStyle: { color: '#e67e22' } },
+            { name: 'root blocker', itemStyle: { color: '#c0392b' } }
           ],
           roam: true, draggable: true,
-          edgeLabel: { show: true, fontSize: 9 },
+          edgeLabel: { show: false, fontSize: 9 },
           edgeSymbol: ['none','arrow'], edgeSymbolSize: 8,
           data: nodes, links,
           emphasis: { focus: 'adjacency', lineStyle: { width: 4 } }
@@ -906,7 +1051,17 @@
           const e = params.data._edge;
           showSamples(e.samples, `Edge ${e.source} → ${e.target} at ${fmtTs(b)}`);
         } else if (params.data && params.data._node) {
-          showSamples(params.data._node.samples, `Node ${params.data._node.id} at ${fmtTs(b)}`);
+          // Own waiter samples + everything transitively stuck behind this node, so
+          // clicking a pure root blocker shows its whole chain instead of "No samples".
+          const n = params.data._node;
+          const ids = new Set([n.id]); const stack = [n.id];
+          while (stack.length) {
+            const cur = stack.pop();
+            for (const k of (childrenOf.get(cur) || [])) if (!ids.has(k)) { ids.add(k); stack.push(k); }
+          }
+          let all = [];
+          for (const id of ids) { const nd = nodeMap.get(id); if (nd) all = all.concat(nd.samples); }
+          showSamples(all, n.isBlocker ? `Chain under ${n.id} at ${fmtTs(b)}` : `Node ${n.id} at ${fmtTs(b)}`);
         }
       });
     }
@@ -936,7 +1091,7 @@
     // Builds a stable Y-axis by walking each SID's dominant parent across the
     // entire window to its ultimate root, then groups + indents by depth.
     function renderChainTimeline() {
-      const data = activeData;   // cross-filter: full set, or one focused sample
+      // Always plots the FULL window (see renderSwimlane); the focused instant is marked.
       const ms = bucketMs();
 
       // 1) Dominant parent per SID across the entire window (stable chain structure).
@@ -1013,6 +1168,12 @@
 
       const sidToRow = new Map();
       yMeta.forEach((m, i) => { if (!m.isSeparator) sidToRow.set(m.sid, i); });
+
+      // One labelled row per SID — grow the canvas instead of letting ECharts
+      // auto-skip y-axis labels, which makes rows look like they were dropped.
+      const chainEl = document.getElementById('chart-chain');
+      const chainH = Math.max(220, Math.min(1600, yLabels.length * 20 + 60));
+      if (chainEl.style.height !== chainH + 'px') { chainEl.style.height = chainH + 'px'; chainChart.resize(); }
 
       // 5) Per (sid, bucket): aggregate waiter samples + blocker-target samples.
       const cells = new Map();
@@ -1108,7 +1269,7 @@
           axisTick: { show: false },
           axisLine: { show: false },
           axisLabel: {
-            fontSize: 10,
+            fontSize: 10, interval: 0,
             fontFamily: 'ui-monospace, SF Mono, Menlo, Consolas, monospace',
             formatter: (val, idx) => {
               const m = yMeta[idx];
@@ -1133,7 +1294,13 @@
           type: 'custom',
           renderItem,
           encode: { x: [1, 2], y: 0 },
-          data: seriesData
+          data: seriesData,
+          markLine: {
+            silent: true, symbol: 'none', animation: false,
+            data: selectedT == null ? [] : [{ xAxis: selectedT }],
+            lineStyle: { color: '#2980b9', width: 2, type: 'solid', opacity: 0.85 },
+            label: { show: true, position: 'insideEndTop', formatter: 'focused sample', fontSize: 9, color: '#2980b9' }
+          }
         }],
         animation: false
       }, true);
@@ -1177,18 +1344,28 @@
       for (const [t, set] of byTime) if (set.size > peak) { peak = set.size; peakT = t; }
 
       // Roots ranked by downstream blocked samples (mirrors the Top-roots chart).
+      // Also track each root's active span and what it was doing while directly
+      // blocking (bEv/bSqlId enrichment) — drives the "idle vs active" verdict.
       const byRoot = new Map();
       for (const d of data) {
         const r = rd(waiterKey(d)).root;
-        let e = byRoot.get(r); if (!e) { e = { n: 0, w: new Set(), ev: new Map() }; byRoot.set(r, e); }
+        let e = byRoot.get(r);
+        if (!e) { e = { n: 0, w: new Set(), ev: new Map(), t0: Infinity, t1: -Infinity, bEv: new Map(), bSql: new Map() }; byRoot.set(r, e); }
         e.n++; e.w.add(waiterKey(d)); if (d.ev) e.ev.set(d.ev, (e.ev.get(d.ev) || 0) + 1);
+        if (d._tms < e.t0) e.t0 = d._tms; if (d._tms > e.t1) e.t1 = d._tms;
+        if (blockerKey(d) === r) {
+          if (d.bEv) e.bEv.set(d.bEv, (e.bEv.get(d.bEv) || 0) + 1);
+          if (d.bSqlId) e.bSql.set(d.bSqlId, (e.bSql.get(d.bSqlId) || 0) + 1);
+        }
       }
+      const topOf = m => ([...m.entries()].sort((a,b)=>b[1]-a[1])[0] || [])[0] || '';
       const topRoots = [...byRoot.entries()].map(([root, e]) => ({
-        root, n: e.n, w: e.w.size, ev: ([...e.ev.entries()].sort((a,b)=>b[1]-a[1])[0] || [])[0] || ''
+        root, n: e.n, w: e.w.size, ev: topOf(e.ev), t0: e.t0, t1: e.t1, bEv: topOf(e.bEv), bSql: topOf(e.bSql)
       })).sort((a,b) => b.n - a.n);
 
       const kpis = [
         { num: data.length,   lbl: 'Blocked samples' },
+        { num: fmtDur(data.length * SAMPLE_MS / 1000), lbl: '≈ Blocked session-time' },
         { num: waiters.size,  lbl: 'Waiting sessions' },
         { num: blockers.size, lbl: 'Blocking sessions' },
         { num: roots.size,    lbl: 'Wait chains' },
@@ -1204,15 +1381,30 @@
         const id = identityFor(top.root);
         const who = ['user','module','prog'].map(k => id[k]).filter(Boolean).slice(0, 2).join(' / ');
         lines.push(`<div class="lead">Biggest root cause: <b>${top.root}</b>${who ? ` (${escapeHtml(who)})` : ''} — ` +
-                   `<b>${top.n}</b> blocked samples behind it across <b>${top.w}</b> waiter(s)` +
-                   `${top.ev ? `, mostly <code>${escapeHtml(top.ev)}</code>` : ''}.</div>`);
+                   `≈<b>${fmtDur(top.n * SAMPLE_MS / 1000)}</b> of blocked session time (${top.n} samples) ` +
+                   `across <b>${top.w}</b> waiter(s)${top.ev ? `, mostly <code>${escapeHtml(top.ev)}</code>` : ''}.</div>`);
+        // Idle vs active blocker — the first triage question.
+        const doing = top.bEv
+          ? `was active on <code>${escapeHtml(top.bEv)}</code>${top.bSql ? `, running SQL <code>${escapeHtml(top.bSql)}</code>` : ''}`
+          : `was <b>idle while holding the lock</b> (never sampled as active — likely an uncommitted transaction)`;
+        lines.push(`<div>While blocking, <b>${top.root}</b> ${doing}; its chain was active ` +
+                   `<b>${fmtTs(top.t0)}</b> → <b>${fmtTs(top.t1)}</b> (${fmtDur((top.t1 - top.t0 + SAMPLE_MS) / 1000)}).</div>`);
       }
       lines.push(`<div>Peak contention: <b>${peak}</b> session(s) blocked simultaneously` +
                  `${peakT ? ` around <b>${fmtTs(new Date(peakT).getTime())}</b>` : ''}; ` +
                  `deepest wait chain is <b>${maxDepth + 1}</b> level(s).</div>`);
       if (topRoots.length > 1) {
-        const rest = topRoots.slice(1, 3).map(r => `<b>${r.root}</b> (${r.n})`).join(', ');
+        const rest = topRoots.slice(1, 3).map(r => `<b>${r.root}</b> (≈${fmtDur(r.n * SAMPLE_MS / 1000)})`).join(', ');
         lines.push(`<div>Other notable roots: ${rest}.</div>`);
+      }
+      // Resolved, or still going? Compare the last blocking sample to the window end.
+      const lastT = data[data.length - 1]._tms;
+      const endMs = meta.endTime ? new Date(meta.endTime).getTime() : NaN;
+      if (isFinite(endMs) && endMs - lastT <= 2 * SAMPLE_MS) {
+        lines.push(`<div style="color:var(--warn);"><b>Blocking was still active in the last sample of the window</b> — ` +
+                   `likely ongoing; consider a wider window or live V$ views.</div>`);
+      } else {
+        lines.push(`<div>Last blocking sample at <b>${fmtTs(lastT)}</b> — contention cleared before the window ended.</div>`);
       }
       document.getElementById('findings').innerHTML = lines.join('');
     }
@@ -1268,7 +1460,7 @@
                    (idLines ? `<br>Identity:<br>${idLines}` : '');
           }
         },
-        grid: { left: 8, right: 70, top: 8, bottom: 26, containLabel: true },
+        grid: { left: 8, right: 120, top: 8, bottom: 26, containLabel: true },
         xAxis: { type: 'value', name: 'downstream blocked samples', nameLocation: 'middle', nameGap: 28,
                  nameTextStyle: { fontSize: 10 }, axisLabel: { fontSize: 10 }, minInterval: 1 },
         yAxis: {
@@ -1285,7 +1477,7 @@
           itemStyle: { color: '#c0392b', borderRadius: [0, 3, 3, 0] },
           label: {
             show: true, position: 'right', fontSize: 10, color: '#555',
-            formatter: p => { const r = ranked[p.dataIndex]; return `${r.n} · ${r.waiters}w`; }
+            formatter: p => { const r = ranked[p.dataIndex]; return `${r.n} samples · ${r.waiters} waiters`; }
           }
         }],
         animation: false
@@ -1360,10 +1552,16 @@
         return;
       }
 
-      // Color nodes: blockers (left side / suffix) in red-orange, waiters (right side) in blue.
-      // In SID mode we don't know which is which without an extra pass — fall back to a neutral palette.
+      // Color nodes by role, matching the blocking tree: red = root blocker,
+      // orange = blocks & waits, blue = waiter. In grouped modes the
+      // "(blocker)" / "(waiter)" suffix decides.
+      const srcSet = new Set(links.map(l => l.source));
+      const dstSet = new Set(links.map(l => l.target));
       function nodeColor(name) {
-        if (mode === 'sid') return '#5B7DA8';
+        if (mode === 'sid') {
+          if (srcSet.has(name) && dstSet.has(name)) return '#e67e22';
+          return srcSet.has(name) ? '#c0392b' : '#2980b9';
+        }
         if (name.endsWith('(blocker)')) return '#C0392B';
         if (name.endsWith('(waiter)'))  return '#1F77B4';
         return '#888';
@@ -1389,14 +1587,18 @@
           nodeGap: 8,
           layoutIterations: 32,
           lineStyle: { color: 'gradient', curveness: 0.5, opacity: 0.5 },
-          label: { fontSize: 11, color: '#34495e' },
+          label: { fontSize: 11, color: '#34495e',
+                   formatter: mode === 'sid' ? (p => decorateSidLabel(p.name)) : '{b}' },
           emphasis: { focus: 'adjacency', lineStyle: { opacity: 0.85 } }
         }],
         animation: false
       }, true);
     }
 
-    // ----- Sample detail table -----
+    // ----- Sample detail -----
+    // Renders a hierarchical blocker -> waiter list (so the blocking session's
+    // own detail is shown as a parent node, with the sessions it blocks nested
+    // beneath it), plus the full flat per-sample table in a collapsible section.
     function showSamples(samples, title) {
       const wrap = document.getElementById('sampleTableWrap');
       if (!samples || samples.length === 0) {
@@ -1404,7 +1606,86 @@
         return;
       }
       samples = samples.slice().sort((a,b)=>a._tms - b._tms);
-      const rows = samples.slice(0, 500).map(s => `
+
+      // ---- Build the blocker -> waiter forest for these samples ----
+      const nodes = new Map();                  // "inst:sid" -> node
+      function getNode(key, inst, sid, serial) {
+        let n = nodes.get(key);
+        if (!n) { n = { key, inst: inst||1, sid, serial, asWaiter: null, asBlocker: null,
+                        children: new Set(), parents: new Set(), waitCount: 0 }; nodes.set(key, n); }
+        if (serial != null && serial !== '' && (n.serial == null || n.serial === '')) n.serial = serial;
+        return n;
+      }
+      for (const s of samples) {
+        const wKey = `${s.inst||1}:${s.sid}`;
+        const w = getNode(wKey, s.inst, s.sid, s.serial);
+        if (!w.asWaiter) w.asWaiter = { ev:s.ev, wc:s.wc, sqlId:s.sqlId, user:s.user,
+                                        prog:s.prog, module:s.module, action:s.action, mach:s.mach, conId:s.conId };
+        w.waitCount++;
+        if (s.bSid != null) {
+          const bKey = `${s.bInst||1}:${s.bSid}`;
+          const b = getNode(bKey, s.bInst, s.bSid, s.bSer);
+          if (!b.asBlocker) b.asBlocker = { user:s.bUser, prog:s.bProg, module:s.bMod, action:s.bAct,
+                                            mach:s.bMach, ev:s.bEv, sqlId:s.bSqlId, wc:s.bWc,
+                                            state:s.bState, status:s.bStatus };
+          if (bKey !== wKey) { b.children.add(wKey); w.parents.add(bKey); }
+        }
+      }
+
+      const roleOf = n => (n.parents.size && n.children.size) ? 'mid' : (n.children.size ? 'root' : 'leaf');
+      const DOT = { root:'#c0392b', mid:'#e67e22', leaf:'#2980b9' };
+      const ROLE_LABEL = { root:'root blocker', mid:'blocks & waits', leaf:'waiter' };
+
+      function nodeHtml(key, visited) {
+        const n = nodes.get(key); if (!n) return '';
+        const role = roleOf(n);
+        const sid = `${n.inst}:${n.sid}${(n.serial!=null&&n.serial!=='')?','+n.serial:''}`;
+        let ident, activity, meta = [];
+        if (n.asWaiter) {
+          const w = n.asWaiter;
+          ident = [w.user, w.module ? w.module + (w.action ? '/'+w.action : '') : null].filter(Boolean).map(escapeHtml).join(' · ');
+          activity = `waiting on <b>${escapeHtml(w.ev||'?')}</b>` + (w.wc ? ` <span class="ct-wc">${escapeHtml(w.wc)}</span>` : '');
+          if (n.children.size) activity += ` · <span class="ct-meta">blocking ${n.children.size} session${n.children.size>1?'s':''}</span>`;
+          meta = [w.prog && escapeHtml(w.prog), w.mach && escapeHtml(w.mach),
+                  w.sqlId && `SQL <code>${escapeHtml(w.sqlId)}</code>`, w.conId && `CON ${w.conId}`];
+        } else if (n.asBlocker) {
+          const b = n.asBlocker;
+          ident = [b.user, b.module ? b.module + (b.action ? '/'+b.action : '') : null].filter(Boolean).map(escapeHtml).join(' · ')
+                  || '<span class="ct-meta">identity not sampled</span>';
+          activity = b.ev ? `active: <b>${escapeHtml(b.ev)}</b>` + (b.wc ? ` <span class="ct-wc">${escapeHtml(b.wc)}</span>` : '')
+                          : `<i class="ct-meta">holding lock — not sampled as active</i>`;
+          if (n.children.size) activity += ` · <span class="ct-meta">blocking ${n.children.size} session${n.children.size>1?'s':''}</span>`;
+          meta = [b.prog && escapeHtml(b.prog), b.mach && escapeHtml(b.mach),
+                  b.sqlId && `SQL <code>${escapeHtml(b.sqlId)}</code>`, b.status && `status ${escapeHtml(b.status)}`];
+        } else { ident = ''; activity = ''; }
+        if (n.waitCount > 1) meta.push(`${n.waitCount} samples`);
+        const metaHtml = meta.filter(Boolean).join(' · ');
+
+        const node = `<div class="ct-node">
+            <span class="ct-dot" style="background:${DOT[role]}"></span>
+            <div class="ct-main">
+              <span class="ct-sid">${sid}</span> <span class="ct-role ${role}">${ROLE_LABEL[role]}</span>
+              ${ident ? ` <span class="ct-ident">${ident}</span>` : ''}
+              <div class="ct-act">${activity}</div>
+              ${metaHtml ? `<div class="ct-meta">${metaHtml}</div>` : ''}
+            </div>
+          </div>`;
+        if (visited.has(key)) return `<li>${node}<ul><li><span class="ct-meta">↻ cycle — already shown above</span></li></ul></li>`;
+        const seen = new Set(visited); seen.add(key);
+        const kids = [...n.children].sort().map(c => nodeHtml(c, seen)).join('');
+        return `<li>${node}${kids ? `<ul>${kids}</ul>` : ''}</li>`;
+      }
+
+      // Roots = block someone but aren't blocked within this set (cycle fallback: any blocker).
+      let roots = [...nodes.values()].filter(n => n.children.size && !n.parents.size).map(n => n.key);
+      if (!roots.length) roots = [...nodes.values()].filter(n => n.children.size).map(n => n.key);
+      roots.sort();
+      const treeHtml = roots.length
+        ? `<ul class="chain-tree">${roots.map(r => nodeHtml(r, new Set())).join('')}</ul>`
+        : '<div class="empty">No blocker → waiter relationships in this selection.</div>';
+
+      // ---- Flat per-sample table (kept, collapsible) ----
+      const trows = samples.slice(0, 500).map(s => `
         <tr>
           <td>${fmtTs(s._tms)}</td>
           <td>${s.inst||1}:${s.sid},${s.serial||''}</td>
@@ -1422,19 +1703,26 @@
           <td>${s.conId||''}</td>
         </tr>`).join('');
       const truncNote = samples.length > 500 ? `<div class="footnote">Showing first 500 of ${samples.length} samples.</div>` : '';
+
+      const waiterCount = [...nodes.values()].filter(n => n.asWaiter).length;
+      const blockerCount = [...nodes.values()].filter(n => n.children.size).length;
       wrap.innerHTML = `
-        <div style="font-size:12px;color:#555;margin-bottom:6px;"><b>${escapeHtml(title)}</b> — ${samples.length} samples</div>
-        <div style="max-height:380px;overflow:auto;">
-          <table class="samples">
-            <thead><tr>
-              <th>Time</th><th>Waiter</th><th>Blocker</th><th>Wait event</th><th>Class</th>
-              <th>SQL_ID</th><th>User</th><th>Program</th><th>Module</th><th>Action</th><th>Machine</th>
-              <th>Blocker doing</th><th>Blocker SQL</th><th>CON</th>
-            </tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-        ${truncNote}`;
+        <div style="font-size:12px;color:#555;margin-bottom:8px;"><b>${escapeHtml(title)}</b> — ${samples.length} samples · ${blockerCount} blocking / ${waiterCount} waiting session(s)</div>
+        <div style="max-height:420px;overflow:auto;">${treeHtml}</div>
+        <details style="margin-top:10px;">
+          <summary style="cursor:pointer;font-size:12px;color:#555;">Flat per-sample table (${samples.length} rows)</summary>
+          <div style="max-height:380px;overflow:auto;margin-top:6px;">
+            <table class="samples">
+              <thead><tr>
+                <th>Time</th><th>Waiter</th><th>Blocker</th><th>Wait event</th><th>Class</th>
+                <th>SQL_ID</th><th>User</th><th>Program</th><th>Module</th><th>Action</th><th>Machine</th>
+                <th>Blocker doing</th><th>Blocker SQL</th><th>CON</th>
+              </tr></thead>
+              <tbody>${trows}</tbody>
+            </table>
+          </div>
+          ${truncNote}
+        </details>`;
     }
 
     function escapeHtml(s) {
