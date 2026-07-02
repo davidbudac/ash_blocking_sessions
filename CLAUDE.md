@@ -16,12 +16,14 @@ The runtime target is a remote Oracle CDB on host `dbmint:2201` (user `oracle`, 
 ./run_seed.sh              # 240s wait
 ./run_seed.sh 60           # 60s wait
 
-# Build the HTML report (rsyncs project up, runs sqlplus as sysdba, rsyncs reports back).
-# Args are positional; 'AUTO' / 'ALL' fall back to defaults.
-./run_report.sh                                          # last 2h, all containers
-./run_report.sh 2026-05-20T10:00:00 2026-05-20T14:00:00  # explicit window
-./run_report.sh AUTO AUTO 3                              # last 2h, only PDB1
-./run_report.sh AUTO AUTO ALL report.html                # custom output filename
+# Build the HTML report (rsyncs project up, runs sqlplus on the host, rsyncs reports back).
+# Args are positional: [connect_string] [begin] [end] [con_id] [out_file];
+# 'AUTO' / 'ALL' fall back to defaults. Arg 1 is the sqlplus connect string
+# ('AUTO' = '/ as sysdba'); quote it if it contains spaces.
+./run_report.sh                                                    # / as sysdba, last 2h, all containers
+./run_report.sh "/ as sysdba" 2026-05-20T10:00:00 2026-05-20T14:00:00  # explicit window
+./run_report.sh AUTO AUTO AUTO 3                                   # last 2h, only PDB1
+./run_report.sh 'c##rep/pw@//localhost/cdb1.world' AUTO AUTO ALL report.html  # named common user
 
 # Open the latest report locally
 open "$(ls -1t reports/*.html | head -n1)"
@@ -33,7 +35,7 @@ There is **no build, no lint, no test runner**. UI iteration is done by editing 
 
 ## How a report is produced
 
-1. **`run_report.sh`** rsyncs the repo (excluding `reports/` and `.git/`) to `oracle@dbmint:~/ash_blocking_sessions`, then SSHes in and runs `sqlplus -S -L / as sysdba @build_report.sql ...`.
+1. **`run_report.sh`** rsyncs the repo (excluding `reports/` and `.git/`) to `oracle@dbmint:~/ash_blocking_sessions`, then SSHes in and runs `sqlplus -S -L <connect_string> @build_report.sql ...` (arg 1; default `/ as sysdba`). A named user must be a **common** user connected to `CDB$ROOT` with `SELECT_CATALOG_ROLE` plus access to the `ASH_ASSETS`/`ASH_REPORTS` directory objects — `sql/01_dirs.sql` runs `CREATE OR REPLACE DIRECTORY`, so it needs `CREATE ANY DIRECTORY` unless a DBA pre-creates the directories and that include is dropped.
 2. **`build_report.sql`** is the driver. It sources `sql/00_settings.sql` (non-interactive SQL*Plus settings, NLS formats, `WHENEVER SQLERROR EXIT FAILURE`), then `sql/01_dirs.sql` (creates Oracle directory objects `ASH_ASSETS` → `assets/` and `ASH_REPORTS` → `reports/` — paths are **hardcoded** to `/home/oracle/ash_blocking_sessions`), then `sql/20_emit_html.sql`.
 3. **`sql/20_emit_html.sql`** is the core PL/SQL block. It:
    - Counts blocking samples in the window. Refuses to render if `> 100000` (raises `-20001`).
@@ -129,7 +131,7 @@ To test multiple concurrent chains and multiple wait *classes* (colors), generat
 ./run_seed.sh                 # seed Patterns A–D, wait 240s, force an AWR snapshot
                               # (./run_seed.sh 60 for a quick, lower-sample smoke test)
 # copy the suggested window it prints, then:
-./run_report.sh <begin> <end> 3   # CON_ID 3 = PDB1
+./run_report.sh AUTO <begin> <end> 3   # AUTO = / as sysdba; CON_ID 3 = PDB1
 ```
 
 Then **verify the real data mix** before trusting the render — extract the embedded `window.ASH_DATA` from the generated `reports/ash_blocking_<ts>.html` and tally distinct `ev`/`wc` and how many samples carry >1 wait event at once. A healthy run shows `enq: TX - row lock contention`, `enq: TM - contention`, and `enq: UL - contention` overlapping across multiple samples. If everything collapsed to a single event, a lock leaked across runs (see gotchas) — re-seed. Finally, run the level-2 harness against the generated report to confirm it renders without throwing.

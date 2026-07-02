@@ -44,5 +44,5 @@ ssh -p "${SSH_PORT}" "${REMOTE_USER}@${HOST}" \
 SEED_END_LOCAL="$(date -u '+%Y-%m-%dT%H:%M:%S')"
 echo
 echo "==> Done. Suggested report window (UTC, give or take a few seconds):"
-echo "    ./run_report.sh ${SEED_START_LOCAL} ${SEED_END_LOCAL} 3"
-echo "    (CON_ID 3 = PDB1, where the seed jobs ran)"
+echo "    ./run_report.sh AUTO ${SEED_START_LOCAL} ${SEED_END_LOCAL} 3"
+echo "    (AUTO = connect '/ as sysdba'; CON_ID 3 = PDB1, where the seed jobs ran)"
