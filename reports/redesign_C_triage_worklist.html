@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Triage Worklist — redesign preview C</title>
+<style>
+  :root{--bg:#f4f6f8;--card:#fff;--ink:#1f2a36;--muted:#6b7887;--line:#e3e7ec;
+    --crit:#c0392b;--warn:#e8703a;--amber:#e0a021;--ok:#1e8449;--accent:#2c5f86}
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);font-size:13.5px;line-height:1.5}
+  .wrap{max-width:1120px;margin:0 auto;padding:22px 22px 60px}
+  .topline{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+  .topline h1{font-size:17px;font-weight:650;margin:0}
+  .topline .meta{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#eef1f4;padding:0 5px;border-radius:4px;font-size:.88em}
+  abbr{text-decoration:none;border-bottom:1px dotted #aab4bf;cursor:help}
+
+  .banner{background:linear-gradient(180deg,#fff,#fdf6f5);border:1px solid var(--line);border-left:6px solid var(--crit);
+    border-radius:10px;padding:16px 20px;box-shadow:0 1px 3px rgba(20,30,45,.06)}
+  .banner .big{font-size:19px;font-weight:600;line-height:1.35}
+  .banner .big b{color:var(--crit)}
+  .banner .means{font-size:13px;color:#5a6774;margin-top:6px}
+  .banner .means b{color:#3a4a5a}
+  .bchips{display:flex;gap:10px;flex-wrap:wrap;margin-top:13px}
+  .bchip{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 13px;min-width:120px}
+  .bchip .n{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
+  .bchip .l{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:3px}
+  .bchip.live .n{color:var(--crit)}
+  .bchip.clear .n{color:var(--ok)}
+
+  .sect-h{display:flex;align-items:center;gap:11px;margin:28px 2px 12px;font-size:11.5px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:#8593a2}
+  .sect-h::after{content:"";flex:1;height:1px;background:var(--line)}
+  .sect-h .n{color:var(--accent)}
+
+  /* hero problem timeline */
+  .ptl{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px 8px;box-shadow:0 1px 2px rgba(20,30,45,.05)}
+  .ptl-axis{position:relative;height:15px;margin-left:238px;margin-right:8px;color:var(--muted);font-size:10.5px}
+  .ptl-axis .tk{position:absolute;transform:translateX(-50%);font-variant-numeric:tabular-nums}
+  .prow{display:grid;grid-template-columns:238px 1fr;gap:8px;align-items:center;padding:4px 0}
+  .prow .plabel{display:flex;align-items:center;gap:8px;min-width:0}
+  .prow .sev{width:22px;height:22px;border-radius:6px;flex:0 0 auto;color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .prow .pl-txt{min-width:0}
+  .prow .pl-txt .t{font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .prow .pl-txt .s{font-size:10.5px;color:var(--muted)}
+  .ptrack{position:relative;height:26px;background:#f2f5f8;border:1px solid #eef1f4;border-radius:6px;overflow:hidden}
+  .ptrack .bar{position:absolute;top:0;bottom:0;border-radius:5px;opacity:.22}
+  .ptrack svg{position:absolute;inset:0;width:100%;height:100%}
+  .ptrack .ic{position:absolute;top:50%;transform:translate(-50%,-50%);font-size:9px;font-weight:800;color:#fff;
+    padding:1px 4px;border-radius:4px;line-height:1.4;white-space:nowrap}
+  .ptrack .live{position:absolute;top:2px;bottom:2px;width:4px;border-radius:2px;background:var(--crit);animation:pulse 1.7s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(192,57,43,.45)}70%{box-shadow:0 0 0 6px rgba(192,57,43,0)}100%{box-shadow:0 0 0 0 rgba(192,57,43,0)}}
+  .peakline{position:absolute;top:-4px;bottom:-4px;border-left:1.5px dashed #7a8694}
+  .ptl-foot{color:var(--muted);font-size:11px;margin:8px 0 2px 238px}
+
+  /* problem cards */
+  .cards{display:flex;flex-direction:column;gap:12px}
+  .pcard{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 1px 2px rgba(20,30,45,.05);display:grid;grid-template-columns:6px 1fr}
+  .pcard .swatch{background:var(--crit)}
+  .pcard .body{padding:13px 16px}
+  .pc-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:9px}
+  .pc-head .rank{font-size:12px;font-weight:800;color:var(--muted)}
+  .pc-head .title{font-size:15px;font-weight:650}
+  .pc-head .tag{font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.4px}
+  .tag.live{background:#fdecea;color:var(--crit)}
+  .tag.clear{background:#e8f5ee;color:var(--ok)}
+  .prow2{display:grid;grid-template-columns:130px 1fr;gap:6px 12px;font-size:13px;align-items:baseline}
+  .prow2 .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;font-weight:600;padding-top:1px}
+  .prow2 .v b{color:var(--ink)}
+  .culprit{background:#fdecea;color:var(--crit);font-size:10px;font-weight:700;padding:1px 7px;border-radius:20px;text-transform:uppercase;letter-spacing:.3px;margin-left:6px}
+  .lockname{font-weight:600}
+  .glyph{vertical-align:-3px;margin-right:8px}
+  .appchip{display:inline-block;background:#eef2f6;color:#39485a;border-radius:20px;padding:1px 9px;font-size:11.5px;margin:2px 4px 2px 0}
+  .shape{font-size:11px;color:var(--muted);margin-left:2px}
+  .pc-foot{margin-top:11px;padding-top:9px;border-top:1px dashed var(--line);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+  .pc-foot .when{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .discl{cursor:pointer;color:var(--accent);font-size:12px;font-weight:600;user-select:none}
+  .sess{display:none;margin-top:10px}
+  .pcard.open .sess{display:block}
+  table.det{width:100%;border-collapse:collapse;font-size:12px}
+  table.det th,table.det td{text-align:left;padding:5px 8px;border-bottom:1px solid #f0f2f5;vertical-align:top}
+  table.det th{color:var(--muted);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px}
+
+  /* affected apps */
+  .apps{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;box-shadow:0 1px 2px rgba(20,30,45,.05)}
+  .arow{display:grid;grid-template-columns:190px 1fr 88px;gap:12px;align-items:center;padding:5px 0;font-size:13px}
+  .arow .abar{height:16px;background:#edf0f3;border-radius:5px;overflow:hidden}
+  .arow .abar > i{display:block;height:100%;border-radius:5px}
+  .arow .aval{text-align:right;font-variant-numeric:tabular-nums;color:#42505f}
+  .note{color:var(--muted);font-size:11.5px;margin-top:14px}
+</style>
+<script src="_preview_data.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="topline"><h1>Blocking — Triage Worklist</h1><div class="meta" id="meta"></div></div>
+  <div class="banner" id="banner"></div>
+
+  <div class="sect-h"><span class="n">▚</span> Problems on one timeline — worst at the top</div>
+  <div class="ptl" id="ptl"></div>
+
+  <div class="sect-h"><span class="n">▚</span> The worklist — every problem in plain language</div>
+  <div class="cards" id="cards"></div>
+
+  <div class="sect-h"><span class="n">▚</span> Which applications were hurt</div>
+  <div class="apps" id="apps"></div>
+
+  <div class="note" id="note"></div>
+</div>
+
+<script>
+(function(){
+  var META=window.ASH_META, DATA=window.ASH_DATA, M=window.ASHEngine.buildModel(DATA,META);
+  var SAMPLE_MS=M.SAMPLE_MS, beginMs=new Date(META.beginTime).getTime(), endMs=new Date(META.endTime).getTime(), span=Math.max(1,endMs-beginMs);
+  function pos(t){return (new Date(t).getTime()-beginMs)/span*100;}
+  function posMs(ms){return (ms-beginMs)/span*100;}
+  function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+  function fmtDur(ms){var s=Math.round(ms/1000);if(s<60)return s+" sec";var m=Math.floor(s/60),r=s%60;if(m<60)return m+" min"+(r?" "+r+"s":"");return Math.floor(m/60)+"h "+(m%60)+"m";}
+  function pad2(n){return(n<10?"0":"")+n;}
+  function hhmmMs(ms){var d=new Date(ms);return pad2(d.getHours())+":"+pad2(d.getMinutes());}
+  function dominantKey(o){var b=null,bc=-1;for(var k in o){if(o[k]>bc){bc=o[k];b=k;}}return b;}
+
+  // plain-English lock dictionary
+  var LOCKS={
+    "enq: TX - row lock contention":{ic:"TX",name:"Row lock",gloss:"two sessions are trying to change the same row"},
+    "enq: TM - contention":{ic:"TM",name:"Table lock",gloss:"one session locked a whole table that others need"},
+    "enq: TX - allocate ITL entry":{ic:"ITL",name:"Block space",gloss:"a data block ran out of transaction slots"},
+    "buffer busy waits":{ic:"BB",name:"Buffer busy",gloss:"sessions are queued for the very same data block"},
+    "library cache lock":{ic:"LC",name:"Library-cache lock",gloss:"waiting to use an object that's being changed/parsed"},
+    "library cache pin":{ic:"LC",name:"Library-cache pin",gloss:"waiting to compile/use an object already in use"},
+    "gc buffer busy acquire":{ic:"GC",name:"Cluster block",gloss:"waiting for a block held by another cluster node"},
+    "read by other session":{ic:"IO",name:"Read collision",gloss:"another session is already reading that block from disk"}
+  };
+  function lockOf(ev){return LOCKS[ev]||{ic:"?",name:(ev||"lock"),gloss:"sessions are contending on a shared resource"};}
+
+  // severity ramp amber->orange->red by lost time
+  function lerp(a,b,t){return Math.round(a+(b-a)*t);}
+  function hex(r,g,b){return "#"+[r,g,b].map(function(x){return pad2h(x);}).join("");}
+  function pad2h(n){var s=n.toString(16);return s.length<2?"0"+s:s;}
+  function sevColor(t){ // 0..1
+    var stops=[[224,160,33],[232,112,58],[192,57,43]];
+    if(t<=0.5){var u=t/0.5;return hex(lerp(stops[0][0],stops[1][0],u),lerp(stops[0][1],stops[1][1],u),lerp(stops[0][2],stops[1][2],u));}
+    var u2=(t-0.5)/0.5;return hex(lerp(stops[1][0],stops[2][0],u2),lerp(stops[1][1],stops[2][1],u2),lerp(stops[1][2],stops[2][2],u2));
+  }
+
+  var roots=M.roots, top=roots[0], maxMs=roots[0].blockedMs;
+  var totalMs=M.totalSamples*SAMPLE_MS;
+  var waiterSet={};DATA.forEach(function(r){if(r.bSid!=null)waiterSet[r.inst+":"+r.sid]=1;});
+  var waiterUsers={};DATA.forEach(function(r){if(r.bSid!=null&&r.user)waiterUsers[r.user]=1;});
+  var anyOngoing=roots.some(function(r){return r.stillActive;});
+
+  document.getElementById("meta").innerHTML=esc(META.dbName)+" · "+hhmmMs(beginMs)+"–"+hhmmMs(endMs)+" on "+esc(String(META.beginTime).slice(0,10))+(META.conIdFilter?" · CON_ID "+esc(META.conIdFilter):"");
+
+  // banner
+  document.getElementById("banner").innerHTML=
+    '<div class="big"><b>'+Object.keys(waiterSet).length+' sessions</b> were frozen for <b>≈'+fmtDur(totalMs)+'</b> total, waiting on locks held by others. '+
+      'Worst offender: <b>'+esc(top.user||"?")+' · '+esc(top.module||"?")+'</b> (SID '+esc(top.sid)+')'+(top.stillActive?' — still blocking '+top.victims+' at the end of the window.':' — now cleared.')+'</div>'+
+    '<div class="means"><b>What this means:</b> a “blocked” session is stuck waiting because another session is holding a lock it needs. The one at the top of each chain is the real cause.</div>'+
+    '<div class="bchips">'+
+      '<div class="bchip live"><div class="n">≈'+fmtDur(totalMs)+'</div><div class="l"><abbr title="Total time sessions spent frozen, added up">Session-time lost</abbr></div></div>'+
+      '<div class="bchip"><div class="n">'+Object.keys(waiterSet).length+'</div><div class="l">Sessions frozen</div></div>'+
+      '<div class="bchip"><div class="n">'+roots.length+'</div><div class="l"><abbr title="Independent blocking situations, each with one root cause">Distinct problems</abbr></div></div>'+
+      '<div class="bchip"><div class="n">'+M.peak.count+'</div><div class="l">Worst pile-up @ '+hhmmMs(M.peak.ms)+'</div></div>'+
+      '<div class="bchip '+(anyOngoing?'live':'clear')+'"><div class="n">'+(anyOngoing?'LIVE':'CLEAR')+'</div><div class="l">Status now</div></div>'+
+    '</div>';
+
+  // hero problem timeline
+  var idxT={};M.times.forEach(function(t,i){idxT[t]=i;});
+  function sparkFor(rootKey){var s=M.times.map(function(){return 0;});DATA.forEach(function(r){if(r.bSid==null)return;if(M.rootOf(r.inst+":"+r.sid)===rootKey)s[idxT[r.t]]++;});return s;}
+  function trackSVG(rootKey,color){var vals=sparkFor(rootKey),mx=Math.max.apply(null,vals.concat([1]));
+    var pts=[];M.times.forEach(function(t,i){if(vals[i]>0){pts.push([pos(t),100-(vals[i]/mx*86)-7]);}});
+    if(!pts.length)return"";var d="M "+pts[0][0].toFixed(2)+" 100 ";pts.forEach(function(p){d+="L "+p[0].toFixed(2)+" "+p[1].toFixed(2)+" ";});d+="L "+pts[pts.length-1][0].toFixed(2)+" 100 Z";
+    return '<svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="'+d+'" fill="'+color+'" fill-opacity="0.6"/></svg>';}
+
+  var axis='';for(var i=0;i<=4;i++){var t=beginMs+span*i/4;axis+='<span class="tk" style="left:'+(i/4*100)+'%">'+hhmmMs(t)+'</span>';}
+  var peakPct=posMs(M.peak.ms);
+  var rowsHtml=roots.map(function(r,i){
+    var sc=sevColor(r.blockedMs/maxMs);
+    var lk=lockOf(r.topEvent);
+    var x0=pos(r.first),x1=pos(r.last),w=Math.max(1,x1-x0);
+    var live=r.stillActive;
+    var iconLeft=Math.min(94,x0+ (w/2));
+    return '<div class="prow">'+
+      '<div class="plabel"><div class="sev" style="background:'+sc+'">'+(i+1)+'</div>'+
+        '<div class="pl-txt"><div class="t">'+esc(r.user||"?")+' · '+esc(r.module||"?")+'</div><div class="s">SID '+esc(r.sid)+' · '+esc(lk.name)+' · '+fmtDur(r.blockedMs)+'</div></div></div>'+
+      '<div class="ptrack">'+
+        '<div class="bar" style="left:'+x0.toFixed(2)+'%;width:'+w.toFixed(2)+'%;background:'+sc+'"></div>'+
+        trackSVG(r.key,sc)+
+        '<div class="ic" style="left:'+iconLeft.toFixed(2)+'%;background:'+sc+'">'+esc(lk.ic)+'</div>'+
+        (live?'<div class="live" style="left:'+Math.min(99,x1).toFixed(2)+'%"></div>':'')+
+        '<div class="peakline" style="left:'+peakPct.toFixed(2)+'%"></div>'+
+      '</div></div>';
+  }).join("");
+  document.getElementById("ptl").innerHTML='<div class="ptl-axis">'+axis+'</div>'+rowsHtml+
+    '<div class="ptl-foot">Bar length = how long the problem lasted · colour = severity (session-time lost) · badge = lock type · <span style="color:#c0392b">▮</span> still live · dashed line = worst pile-up ('+M.peak.count+' at '+hhmmMs(M.peak.ms)+').</div>';
+
+  // victims per root
+  function victimsOf(rootKey){var agg={};
+    DATA.forEach(function(r){if(r.bSid==null)return;var w=r.inst+":"+r.sid;if(M.rootOf(w)!==rootKey)return;
+      var a=agg[w]||(agg[w]={sid:r.sid,samples:0,ev:{},sql:{},user:r.user,module:r.module,depth:M.depthOf(w)});a.samples++;if(r.ev)a.ev[r.ev]=(a.ev[r.ev]||0)+1;if(r.sqlId)a.sql[r.sqlId]=(a.sql[r.sqlId]||0)+1;});
+    return Object.keys(agg).map(function(k){return agg[k];}).sort(function(x,y){if(x.depth!==y.depth)return x.depth-y.depth;return y.samples-x.samples;});
+  }
+  function shapeGlyph(rootKey,vics){
+    var maxDepth=Math.max.apply(null,vics.map(function(v){return v.depth;}).concat([1]));
+    var W=64,H=26,cx=10,cy=13;var s='<svg class="glyph" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">';
+    s+='<circle cx="'+cx+'" cy="'+cy+'" r="5" fill="#c0392b"/>';
+    if(maxDepth>=2){ // chain
+      var xs=[cx];for(var d=1;d<=maxDepth;d++){var x=cx+d*17;xs.push(x);
+        s+='<line x1="'+(xs[d-1]+5)+'" y1="'+cy+'" x2="'+(x-5)+'" y2="'+cy+'" stroke="#b9c3ce" stroke-width="1.5"/>';
+        s+='<circle cx="'+x+'" cy="'+cy+'" r="4.5" fill="'+(d<maxDepth?'#e67e22':'#2e86c1')+'"/>';}
+    } else { // fan-in
+      var n=Math.min(vics.length,4);for(var j=0;j<n;j++){var yy=4+j*(H-8)/(Math.max(1,n-1));var vx=cx+26;
+        s+='<line x1="'+(cx+5)+'" y1="'+cy+'" x2="'+(vx-4)+'" y2="'+yy+'" stroke="#b9c3ce" stroke-width="1.2"/>';
+        s+='<circle cx="'+vx+'" cy="'+yy+'" r="3.6" fill="#2e86c1"/>';}
+      if(vics.length>4)s+='<text x="'+(cx+34)+'" y="'+(cy+3)+'" font-size="9" fill="#6b7887">+'+(vics.length-4)+'</text>';
+    }
+    return s+'</svg>';
+  }
+
+  // problem cards
+  var cardsHtml=roots.map(function(r,i){
+    var sc=sevColor(r.blockedMs/maxMs);var lk=lockOf(r.topEvent);var vics=victimsOf(r.key);
+    var live=r.stillActive;var maxDepth=Math.max.apply(null,vics.map(function(v){return v.depth;}).concat([1]));
+    var shape=maxDepth>=2?('Chain '+(maxDepth+1)+' deep'):('Fan-in: '+r.victims+' on 1 blocker');
+    var doing=r.idle?'<b>Idle while holding the lock</b> — no SQL was running, which usually means a transaction was left <b>uncommitted</b>.':('<b>Running SQL</b> <code>'+esc(r.sqlId)+'</code> while holding the lock.');
+    var appchips=vics.map(function(v){return '<span class="appchip">'+esc(v.user||"?")+' · '+esc(v.module||"?")+' <span style="color:#9aa7b4">(SID '+esc(v.sid)+')</span></span>';}).join("");
+    var sessRows=vics.map(function(v){return '<tr><td style="padding-left:'+(8+v.depth*14)+'px">'+(v.depth===0?"":v.depth>=2?"↳↳ ":"↳ ")+'SID '+esc(v.sid)+'</td><td>'+esc(v.user||"?")+' · '+esc(v.module||"?")+'</td><td>'+esc((dominantKey(v.ev)||"").replace(/^enq: /,""))+'</td><td><code>'+esc(dominantKey(v.sql)||"—")+'</code></td><td style="text-align:right">'+fmtDur(v.samples*SAMPLE_MS)+'</td></tr>';}).join("");
+    return '<div class="pcard" data-i="'+i+'"><div class="swatch" style="background:'+sc+'"></div><div class="body">'+
+      '<div class="pc-head"><span class="rank">PROBLEM #'+(i+1)+'</span><span class="title">'+esc(r.user||"?")+' · '+esc(r.module||"?")+'</span>'+
+        '<span class="tag '+(live?'live':'clear')+'">'+(live?'● live':'cleared')+'</span>'+
+        '<span style="margin-left:auto;font-size:12.5px;color:#42505f">≈'+fmtDur(r.blockedMs)+' lost · '+r.victims+' app'+(r.victims>1?'s':'')+' frozen</span></div>'+
+      '<div class="prow2">'+
+        '<div class="k">Root cause</div><div class="v"><b>SID '+esc(r.sid)+'</b> — '+esc(r.user||"?")+' · '+esc(r.module||"?")+'<span class="culprit">the culprit</span></div>'+
+        '<div class="k">What it\'s doing</div><div class="v">'+doing+'</div>'+
+        '<div class="k">Lock type</div><div class="v"><span class="lockname">'+esc(lk.name)+'</span> <span style="color:#8593a2">('+esc((r.topEvent||"").replace(/^enq: /,"enq: "))+')</span> — '+esc(lk.gloss)+'.</div>'+
+        '<div class="k">Who it froze</div><div class="v">'+shapeGlyph(r.key,vics)+'<span class="shape">'+shape+'</span><div style="margin-top:5px">'+appchips+'</div></div>'+
+      '</div>'+
+      '<div class="pc-foot"><span class="when">Started '+hhmmMs(new Date(r.first).getTime())+' · last seen '+hhmmMs(new Date(r.last).getTime())+(live?' · <span style="color:#c0392b;font-weight:700">STILL LIVE</span>':' · cleared')+'</span>'+
+        '<span class="discl">Show sessions ▸</span></div>'+
+      '<div class="sess"><table class="det"><thead><tr><th>Session</th><th>Application</th><th>Waiting on</th><th>SQL</th><th style="text-align:right">Frozen</th></tr></thead><tbody>'+sessRows+'</tbody></table></div>'+
+      '</div></div>';
+  }).join("");
+  var cwrap=document.getElementById("cards");cwrap.innerHTML=cardsHtml;
+  cwrap.addEventListener("click",function(e){var d=e.target.closest(".discl");if(!d)return;var card=d.closest(".pcard");card.classList.toggle("open");d.textContent=card.classList.contains("open")?"Hide sessions ▾":"Show sessions ▸";});
+
+  // affected apps
+  var appAgg={};
+  DATA.forEach(function(r){if(r.bSid==null)return;var app=(r.user||"?")+" · "+(r.module||"?");var a=appAgg[app]||(appAgg[app]={ms:0,sids:{},worstRoot:null,rc:{}});a.ms+=SAMPLE_MS;a.sids[r.inst+":"+r.sid]=1;var rk=M.rootOf(r.inst+":"+r.sid);a.rc[rk]=(a.rc[rk]||0)+1;});
+  var appList=Object.keys(appAgg).map(function(app){var a=appAgg[app];a.app=app;a.n=Object.keys(a.sids).length;a.worstRoot=dominantKey(a.rc);return a;}).sort(function(x,y){return y.ms-x.ms;});
+  var appMax=appList[0]?appList[0].ms:1;
+  var rootColor={};roots.forEach(function(r){rootColor[r.key]=sevColor(r.blockedMs/maxMs);});
+  document.getElementById("apps").innerHTML=appList.map(function(a){
+    return '<div class="arow"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(a.app)+'</div>'+
+      '<div class="abar"><i style="width:'+(a.ms/appMax*100).toFixed(1)+'%;background:'+(rootColor[a.worstRoot]||'#c0392b')+'"></i></div>'+
+      '<div class="aval">'+fmtDur(a.ms)+' · '+a.n+' sess</div></div>';
+  }).join("")+'<div class="note" style="margin-top:8px">Bar = session-time each application lost while frozen; colour = the problem that hurt it most.</div>';
+
+  document.getElementById("note").innerHTML="Preview C of 3 · impact-first “triage worklist” · plain-language framing for a non-DBA. Every problem here is an idle lock-holder; the “running SQL” wording appears when a blocker is sampled active.";
+})();
+</script>
+</body>
+</html>

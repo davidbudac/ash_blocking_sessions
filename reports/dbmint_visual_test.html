@@ -1,0 +1,1378 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ASH Blocking Sessions Timeline</title>
+  <style>
+    :root {
+      --bg: #fafbfc;
+      --card: #ffffff;
+      --ink: #2c3e50;
+      --muted: #7a8694;
+      --line: #e1e4e8;
+      --accent: #2980b9;
+      --warn: #c0392b;
+      --chain: #e67e22;
+      --header-bg: #2c3e50;
+      --controls-bg: #34495e;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: var(--ink); background: var(--bg); font-size: 13px; }
+    button, select, input { font: inherit; }
+    :where(button, select, input):focus-visible { outline: 2px solid #7fb3d5; outline-offset: 2px; }
+    header { background: var(--header-bg); color: #ecf0f1; padding: 14px 22px; }
+    header h1 { margin: 0; font-size: 18px; font-weight: 500; letter-spacing: 0.2px; }
+    header .meta { font-size: 12px; color: #bdc3c7; margin-top: 4px; }
+    .controls { background: var(--controls-bg); padding: 10px 22px; color: #ecf0f1; font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+    .controls label { display: inline-flex; align-items: center; gap: 6px; }
+    .controls select, .controls input[type=number] { padding: 3px 6px; border: 1px solid #4a5d70; border-radius: 3px; background: #fff; color: var(--ink); font-size: 12px; }
+    .controls input[type=number] { width: 60px; }
+    main { padding: 16px 22px 22px; }
+    section { background: var(--card); margin: 0 0 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    section h2 { font-size: 13px; margin: 0 0 10px 0; color: #555; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+    .impact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+    .impact-item { background: #fff; padding: 10px 12px; min-inline-size: 0; }
+    .impact-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.35px; }
+    .impact-value { margin-top: 4px; font-size: 18px; line-height: 1.15; font-weight: 650; color: #22313f; overflow-wrap: anywhere; }
+    .impact-sub { margin-top: 3px; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+    .legend-inline { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+    .legend-dot { inline-size: 9px; block-size: 9px; display: inline-block; border-radius: 999px; margin-inline-end: 5px; vertical-align: -1px; }
+    .legend-stroke { inline-size: 14px; block-size: 8px; display: inline-block; border: 2px solid currentColor; margin-inline-end: 5px; vertical-align: -1px; }
+    .incident-list { display: grid; gap: 12px; }
+    .incident { border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: #fff; }
+    .incident-header { display: grid; grid-template-columns: minmax(180px, 1.4fr) repeat(4, minmax(90px, 0.7fr)); gap: 10px; padding: 10px 12px; background: #f7f9fb; border-bottom: 1px solid var(--line); align-items: start; }
+    .incident-root { font-weight: 700; color: #22313f; overflow-wrap: anywhere; }
+    .metric-label { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.3px; }
+    .metric-value { margin-top: 2px; font-size: 12.5px; font-weight: 650; color: #34495e; overflow-wrap: anywhere; }
+    .incident-row { display: grid; grid-template-columns: minmax(150px, 210px) 1fr minmax(70px, 90px); gap: 10px; align-items: center; padding: 7px 12px; border-bottom: 1px solid #f0f2f5; }
+    .incident-row:last-child { border-bottom: 0; }
+    .lane-label { font-size: 11.5px; color: #34495e; overflow-wrap: anywhere; }
+    .lane-track { position: relative; block-size: 18px; background: #eef2f6; border-radius: 3px; overflow: hidden; }
+    .lane-bar { position: absolute; inset-block: 3px; border-radius: 3px; min-inline-size: 2px; background: var(--lane-color, #5470c6); }
+    .lane-bar.blocker { background: transparent; border: 2px solid var(--lane-color, #5470c6); inset-block: 2px; }
+    .lane-count { color: var(--muted); font-size: 11px; text-align: end; }
+    .flame-wrap { display: grid; gap: 5px; font-family: ui-monospace, SF Mono, Menlo, Consolas, monospace; font-size: 11.5px; }
+    .flame-row { display: flex; align-items: stretch; min-block-size: 28px; }
+    .flame-cell { display: flex; align-items: center; min-inline-size: 42px; padding: 4px 7px; border: 1px solid rgba(44,62,80,0.16); background: var(--flame-color, #91cc75); color: #17202a; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+    .flame-cell.root { font-weight: 700; }
+    .flame-spacer { flex: 0 0 var(--flame-offset, 0%); }
+    .matrix-wrap { overflow-x: auto; scrollbar-gutter: stable; }
+    .matrix { min-inline-size: 760px; font-size: 11.5px; }
+    .matrix-row { display: grid; grid-template-columns: minmax(170px, 220px) repeat(var(--bucket-count), minmax(38px, 1fr)); align-items: center; min-block-size: 25px; border-bottom: 1px solid #edf0f3; }
+    .matrix-row.header { color: var(--muted); font-size: 10.5px; position: sticky; top: 0; background: #fff; z-index: 1; }
+    .matrix-label { padding-inline-end: 10px; overflow-wrap: anywhere; color: #34495e; }
+    .matrix-cell { block-size: 18px; margin: 2px; border-radius: 3px; border: 1px solid transparent; background: transparent; cursor: pointer; }
+    .matrix-cell.waiting { background: color-mix(in srgb, var(--cell-color, #5470c6) 78%, white); }
+    .matrix-cell.blocking { border-color: var(--cell-color, #5470c6); background: #fff; }
+    .matrix-cell.both { background: color-mix(in srgb, var(--cell-color, #5470c6) 68%, white); border: 2px solid #2c3e50; }
+    .scrubber { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+    .scrubber input[type=range] { flex: 1; }
+    .scrubber button { padding: 2px 10px; border: 1px solid #bbb; background: #f8f9fa; border-radius: 3px; cursor: pointer; font-size: 13px; }
+    .scrubber button:hover { background: #eef; }
+    .empty { color: var(--muted); font-style: italic; padding: 30px 16px; text-align: center; font-size: 13px; }
+    table.samples { font-size: 11.5px; border-collapse: collapse; width: 100%; margin-top: 6px; }
+    table.samples th, table.samples td { padding: 4px 7px; border-bottom: 1px solid #f0f0f0; text-align: left; vertical-align: top; }
+    table.samples th { background: #f5f5f5; font-weight: 600; color: #555; position: sticky; top: 0; }
+    table.samples tr:hover td { background: #fbfcfd; }
+    .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; background: #ecf0f1; color: #34495e; font-size: 11px; }
+    .pill.warn { background: #fadbd8; color: #922b21; }
+    .pill.chain { background: #fdebd0; color: #9c640c; }
+    .pill.ok { background: #d4efdf; color: #196f3d; }
+    .footnote { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>ASH Blocking Sessions Timeline</h1>
+    <div class="meta" id="meta">loading…</div>
+  </header>
+  <div class="controls">
+    <label>Bucket:
+      <select id="bucket">
+        <option value="10">10 s</option>
+        <option value="30">30 s</option>
+        <option value="60" selected>1 min</option>
+        <option value="300">5 min</option>
+        <option value="600">10 min</option>
+        <option value="3600">1 hour</option>
+      </select>
+    </label>
+    <label>Color by:
+      <select id="colorBy">
+        <option value="rootBlocker" selected>Root blocker</option>
+        <option value="event">Waiter event</option>
+        <option value="blocker">Blocker SID</option>
+        <option value="waitClass">Wait class</option>
+        <option value="user">Username</option>
+        <option value="prog">Program</option>
+        <option value="module">Module</option>
+        <option value="action">Action</option>
+      </select>
+    </label>
+    <label>Top-N waiters: <input id="topN" type="number" value="20" min="5" max="200"></label>
+    <fieldset id="idToggles" style="display:inline-flex; gap:10px; padding:2px 8px; margin:0; border:1px solid #4a5d70; border-radius:3px; align-items:center; color:#ecf0f1;">
+      <legend style="padding:0 4px; font-size:11px; color:#bdc3c7;">Show on labels</legend>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="user">user</label>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="prog">program</label>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="module">module</label>
+      <label style="display:inline-flex; gap:3px; align-items:center;"><input type="checkbox" data-id="action">action</label>
+    </fieldset>
+    <span style="margin-left:auto; color:#bdc3c7;" id="counter"></span>
+  </div>
+  <main>
+    <section>
+      <h2>Blocking impact</h2>
+      <div id="impactSummary" class="impact-grid"></div>
+    </section>
+    <section>
+      <h2>Root-cause incident lanes</h2>
+      <div id="incidentLanes" class="incident-list"></div>
+      <div class="footnote">Each incident is grouped by ultimate root blocker. Outlined root bars show when that SID was blocking; filled waiter bars show blocked duration within the report window.</div>
+    </section>
+    <section>
+      <h2>Blocking flame graph</h2>
+      <div id="flameGraph" class="flame-wrap"></div>
+      <div class="footnote">Width is proportional to downstream blocked samples. Click a block to drill matching samples.</div>
+    </section>
+    <section>
+      <h2>Time-aligned chain matrix</h2>
+      <div id="chainMatrix" class="matrix-wrap"></div>
+      <div class="legend-inline">
+        <span><span class="legend-dot" style="background:#5470c6"></span>waiting</span>
+        <span><span class="legend-stroke" style="color:#5470c6"></span>blocking others</span>
+        <span><span class="legend-stroke" style="color:#2c3e50"></span>both</span>
+      </div>
+      <div class="footnote">Columns are buckets. Rows are grouped by root blocker with chain depth indentation.</div>
+    </section>
+    <section>
+      <h2>Overview — blocked samples by bucket</h2>
+      <div id="chart-overview" style="height: 220px"></div>
+      <div class="footnote">Bars stack the selected color dimension. Click a bar to drill the detail table below.</div>
+    </section>
+    <section>
+      <h2>Swimlane — blocked waiters grouped by root blocker</h2>
+      <div id="chart-swimlane" style="height: 580px"></div>
+      <div class="footnote">Rows are the top waiter SIDs, sorted by root blocker and impact. Each segment is a continuous blocked run.</div>
+    </section>
+    <section>
+      <h2>Blocking chain map — root blocker → waiters at a moment in time</h2>
+      <div class="scrubber">
+        <button id="treePlay" type="button" title="Auto-advance through buckets">&#9654;</button>
+        <input id="treeScrub" type="range" min="0" max="0" step="1" value="0" aria-label="Blocking chain snapshot">
+        <span id="treeTime" style="min-width: 170px; font-family: ui-monospace, SF Mono, Menlo, monospace;">—</span>
+        <span id="treeStat" style="color: var(--muted);"></span>
+      </div>
+      <div id="chart-tree" style="height: 560px"></div>
+      <div class="legend-inline">
+        <span><span class="legend-dot" style="background:#c0392b"></span>root blocker</span>
+        <span><span class="legend-dot" style="background:#e67e22"></span>blocked and blocking</span>
+        <span><span class="legend-dot" style="background:#2980b9"></span>waiter</span>
+      </div>
+    </section>
+    <section>
+      <h2>Chain timeline — blocking role over time</h2>
+      <div id="chart-chain" style="height: 460px"></div>
+      <div class="legend-inline">
+        <span><span class="legend-dot" style="background:#5470c6"></span>filled = waiting</span>
+        <span><span class="legend-stroke" style="color:#5470c6"></span>outline = blocking others</span>
+      </div>
+      <div class="footnote">Rows are grouped under their dominant root blocker. Click a cell to drill the detail table.</div>
+    </section>
+    <section>
+      <h2>Sample detail</h2>
+      <div id="sampleTableWrap"><div class="empty">Click an overview bar, swimlane segment, chain edge, or timeline cell to populate this.</div></div>
+    </section>
+  </main>
+  <script>
+    window.ASH_META = {"dbName":"CDB1","dbId":1183716798,"beginTime":"2026-05-26T15:21:57","endTime":"2026-05-26T15:26:25","generatedAt":"2026-05-26T20:35:05","rowCount":114,"conIdFilter":3};
+    window.ASH_DATA = [{"t":"2026-05-26T15:22:10","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:10","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:10","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:10","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:21","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:21","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:21","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:21","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:21","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:22:31","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:31","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:31","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:31","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:31","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:22:41","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:41","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:41","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:41","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:41","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:22:51","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:51","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:51","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:51","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:22:51","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:23:01","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:01","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:01","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:01","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:01","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:23:11","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:11","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:11","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:11","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:11","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:23:21","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:21","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:21","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:21","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:21","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:23:31","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:31","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:31","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:31","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:31","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:23:41","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:41","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:41","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:41","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:41","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:23:51","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:51","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:51","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:51","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:23:51","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:24:01","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:01","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:01","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:01","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:01","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:24:11","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:11","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:11","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:11","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:11","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:24:21","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:21","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:21","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:21","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:21","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:24:31","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:31","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:31","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:31","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:31","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:24:41","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:41","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:41","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:41","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:41","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:24:51","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:51","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:51","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:51","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:24:51","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:25:02","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:02","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:02","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:02","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:02","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:25:12","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:12","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:12","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:12","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:12","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:25:22","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:22","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:22","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:22","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:22","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:25:32","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:32","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:32","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:32","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:32","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:25:42","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:42","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:42","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:42","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:42","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"},{"t":"2026-05-26T15:25:52","inst":1,"sid":57,"serial":23129,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_VMGS","prog":"oracle@poug-dg1.localdomain (J003)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:52","inst":1,"sid":58,"serial":18338,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_OZZG","prog":"oracle@poug-dg1.localdomain (J005)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:52","inst":1,"sid":293,"serial":28571,"bInst":1,"bSid":291,"bSer":11196,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4x5qgqz9smbsa","module":"ORDERS_API","action":"POST_INVOICE_GNAX","prog":"oracle@poug-dg1.localdomain (J002)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:52","inst":1,"sid":295,"serial":36750,"bInst":1,"bSid":56,"bSer":54598,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"4zrj7w6058x2b","module":"NIGHTLY_BATCH","action":"CHAIN_MID","prog":"oracle@poug-dg1.localdomain (J004)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3},{"t":"2026-05-26T15:25:52","inst":1,"sid":296,"serial":61511,"bInst":1,"bSid":295,"bSer":36750,"bStatus":"VALID","ev":"enq: TX - row lock contention","wc":"Application","sqlId":"5u76fgjg60rf4","module":"NIGHTLY_BATCH","action":"CHAIN_LEAF","prog":"oracle@poug-dg1.localdomain (J006)","mach":"poug-dg1.localdomain","userId":0,"user":"SYS","conId":3,"bEv":"enq: TX - row lock contention","bSqlId":"4zrj7w6058x2b","bWc":"Application","bState":"WAITING","bMod":"NIGHTLY_BATCH","bAct":"CHAIN_MID","bProg":"oracle@poug-dg1.localdomain (J004)","bMach":"poug-dg1.localdomain","bUser":"SYS"}];
+  </script>
+  <script>
+  (function(){
+    "use strict";
+    const data = (window.ASH_DATA || []).slice();
+    const meta = window.ASH_META || {};
+
+    // Parse sample times once (Oracle emits "YYYY-MM-DDTHH24:MI:SS" — interpret as local).
+    for (const d of data) { d._tms = new Date(d.t).getTime(); }
+    data.sort((a,b) => a._tms - b._tms);
+
+    document.getElementById('meta').textContent =
+      `DB: ${meta.dbName||'?'} (dbid ${meta.dbId||'?'})  ·  Range: ${meta.beginTime||'?'} → ${meta.endTime||'?'}` +
+      (meta.conIdFilter ? `  ·  CON_ID=${meta.conIdFilter}` : '') +
+      `  ·  Blocking samples: ${data.length}  ·  Generated: ${meta.generatedAt||'?'}`;
+    document.getElementById('counter').textContent = `${data.length} samples`;
+
+    if (data.length === 0) {
+      for (const id of ['impactSummary','incidentLanes','flameGraph','chainMatrix','chart-overview','chart-swimlane','chart-tree','chart-chain']) {
+        const el = document.getElementById(id); if (el) el.innerHTML = '<div class="empty">No blocking samples found in this window.</div>';
+      }
+      return;
+    }
+
+    // ----- Controls -----
+    const bucketSel = document.getElementById('bucket');
+    const colorBySel = document.getElementById('colorBy');
+    const topNInput = document.getElementById('topN');
+
+    // ----- Charts -----
+    const overviewChart = echarts.init(document.getElementById('chart-overview'));
+    const swimlaneChart = echarts.init(document.getElementById('chart-swimlane'));
+    const treeChart = echarts.init(document.getElementById('chart-tree'));
+    const chainChart = echarts.init(document.getElementById('chart-chain'));
+    window.addEventListener('resize', () => {
+      overviewChart.resize(); swimlaneChart.resize(); treeChart.resize(); chainChart.resize();
+    });
+
+    // ----- Helpers -----
+    // Approximate Oracle Enterprise Manager (Top Activity) wait-class palette.
+    // Class names match V$EVENT_NAME.WAIT_CLASS exactly.
+    const OEM_WAIT_CLASS = {
+      'CPU':            '#4F8A2D',  // green
+      'Scheduler':      '#A0BC4D',  // olive / lime
+      'User I/O':       '#1F77B4',  // medium blue
+      'System I/O':     '#16548A',  // dark blue
+      'Concurrency':    '#8B2C2C',  // maroon
+      'Application':    '#C8001E',  // red
+      'Commit':         '#E78F37',  // orange
+      'Configuration':  '#7E398E',  // purple
+      'Administrative': '#D63384',  // magenta
+      'Network':        '#A0522D',  // sienna / tan
+      'Cluster':        '#F4D03F',  // yellow
+      'Queueing':       '#F9E79F',  // pale yellow
+      'Other':          '#C0A0C0'   // muted pink
+    };
+    // Fallback palette for keys that aren't wait classes/events (e.g. blocker SIDs).
+    const PALETTE = [
+      '#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc',
+      '#ff9f7f','#ffdb5c','#37a2da','#32c5e9','#67e0e3','#9fe6b8','#dda0dd','#87ceeb','#f4a460',
+      '#bdb76b','#cd5c5c'
+    ];
+
+    // event-name -> wait-class index, built lazily from the data.
+    let _evToWc = null;
+    function eventToWc(ev) {
+      if (_evToWc === null) {
+        _evToWc = new Map();
+        for (const d of data) if (d.ev) _evToWc.set(d.ev, d.wc || 'Other');
+      }
+      return _evToWc.get(ev) || 'Other';
+    }
+
+    // Deterministic 0..1 hash so the same event always gets the same shade.
+    function strHash01(s) {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+      return ((h >>> 0) % 1000) / 1000;
+    }
+
+    // Shift the lightness of a #rrggbb color by deltaL (in HSL 0..1 space).
+    function shiftLightness(hex, deltaL) {
+      const m = /^#?([0-9a-f]{6})$/i.exec(hex); if (!m) return hex;
+      const n = parseInt(m[1], 16);
+      let r = ((n>>16)&255)/255, g = ((n>>8)&255)/255, b = (n&255)/255;
+      const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
+      let h, s, l = (mx+mn)/2;
+      if (mx === mn) { h = 0; s = 0; }
+      else {
+        const d = mx - mn;
+        s = l > 0.5 ? d/(2-mx-mn) : d/(mx+mn);
+        switch (mx) {
+          case r: h = (g-b)/d + (g<b?6:0); break;
+          case g: h = (b-r)/d + 2; break;
+          case b: h = (r-g)/d + 4; break;
+        }
+        h /= 6;
+      }
+      l = Math.max(0.18, Math.min(0.82, l + deltaL));
+      const hue2rgb = (p,q,t) => {
+        if (t<0) t+=1; if (t>1) t-=1;
+        if (t<1/6) return p+(q-p)*6*t;
+        if (t<1/2) return q;
+        if (t<2/3) return p+(q-p)*(2/3-t)*6;
+        return p;
+      };
+      let rr, gg, bb;
+      if (s === 0) { rr = gg = bb = l; }
+      else {
+        const q = l < 0.5 ? l*(1+s) : l+s-l*s;
+        const p = 2*l - q;
+        rr = hue2rgb(p,q,h+1/3); gg = hue2rgb(p,q,h); bb = hue2rgb(p,q,h-1/3);
+      }
+      const to2 = v => Math.round(v*255).toString(16).padStart(2,'0');
+      return '#' + to2(rr) + to2(gg) + to2(bb);
+    }
+
+    // OEM-aware color for a category key.
+    // Returns null if the key isn't a wait-class/event (caller falls back to PALETTE).
+    function oemColorForKey(k) {
+      const mode = colorBySel.value;
+      if (mode === 'waitClass') {
+        return OEM_WAIT_CLASS[k] || OEM_WAIT_CLASS['Other'];
+      }
+      if (mode === 'event') {
+        const base = OEM_WAIT_CLASS[eventToWc(k)] || OEM_WAIT_CLASS['Other'];
+        // ±12% lightness shift per event so multiple events in the same class
+        // share hue but remain visually distinct.
+        return shiftLightness(base, (strHash01(k) - 0.5) * 0.24);
+      }
+      return null; // blocker SIDs, etc.
+    }
+
+    function colorKey(d) {
+      const mode = colorBySel.value;
+      if (mode === 'rootBlocker') return rootBlockerFor(waiterKey(d));
+      if (mode === 'blocker')   return `${d.bInst||1}:${d.bSid}`;
+      if (mode === 'waitClass') return d.wc || 'Other';
+      if (mode === 'user')      return d.user || '(unknown user)';
+      if (mode === 'prog')      return d.prog || '(no program)';
+      if (mode === 'module')    return d.module || '(no module)';
+      if (mode === 'action')    return d.action || '(no action)';
+      return d.ev || '(no event)';
+    }
+
+    function waiterKey(d) { return `${d.inst||1}:${d.sid}`; }
+    function blockerKey(d) { return `${d.bInst||1}:${d.bSid}`; }
+
+    let _chainCache = null;
+    function buildChainCache() {
+      const parentCounts = new Map();
+      const allSids = new Set();
+      const waitCount = new Map();
+      const blockCount = new Map();
+      for (const d of data) {
+        const wk = waiterKey(d), bk = blockerKey(d);
+        allSids.add(wk); allSids.add(bk);
+        waitCount.set(wk, (waitCount.get(wk) || 0) + 1);
+        blockCount.set(bk, (blockCount.get(bk) || 0) + 1);
+        if (!parentCounts.has(wk)) parentCounts.set(wk, new Map());
+        const m = parentCounts.get(wk);
+        m.set(bk, (m.get(bk) || 0) + 1);
+      }
+      const parentOf = new Map();
+      for (const [sid, m] of parentCounts) {
+        parentOf.set(sid, [...m.entries()].sort((a,b) => b[1] - a[1])[0][0]);
+      }
+      function rootAndDepth(sid) {
+        const seen = new Set([sid]);
+        let cur = sid, depth = 0;
+        while (parentOf.has(cur)) {
+          const p = parentOf.get(cur);
+          if (seen.has(p)) break;
+          seen.add(p); cur = p; depth++;
+        }
+        return { root: cur, depth };
+      }
+      return { parentOf, allSids, waitCount, blockCount, rootAndDepth };
+    }
+    function chainCache() {
+      if (_chainCache === null) _chainCache = buildChainCache();
+      return _chainCache;
+    }
+    function rootBlockerFor(sidKey) {
+      return chainCache().rootAndDepth(sidKey).root;
+    }
+
+    function renderImpactSummary() {
+      const { allSids, waitCount, blockCount, rootAndDepth } = chainCache();
+      const uniqueWaiters = waitCount.size;
+      const uniqueBlockers = blockCount.size;
+      const rootImpact = new Map();
+      for (const d of data) {
+        const root = rootAndDepth(waiterKey(d)).root;
+        if (!rootImpact.has(root)) rootImpact.set(root, { samples: 0, waiters: new Set(), modules: new Map(), users: new Map(), first: d._tms, last: d._tms });
+        const r = rootImpact.get(root);
+        r.samples++;
+        r.waiters.add(waiterKey(d));
+        if (d.module) r.modules.set(d.module, (r.modules.get(d.module) || 0) + 1);
+        if (d.user) r.users.set(d.user, (r.users.get(d.user) || 0) + 1);
+        r.first = Math.min(r.first, d._tms);
+        r.last = Math.max(r.last, d._tms);
+      }
+      const topRoot = [...rootImpact.entries()].sort((a,b) => b[1].samples - a[1].samples)[0];
+      const buckets = new Map();
+      const ms = bucketMs();
+      for (const d of data) {
+        const b = Math.floor(d._tms / ms) * ms;
+        if (!buckets.has(b)) buckets.set(b, new Set());
+        buckets.get(b).add(waiterKey(d));
+      }
+      const peak = [...buckets.entries()]
+        .map(([b, s]) => ({ b, n: s.size }))
+        .sort((a,b) => b.n - a.n)[0] || { b: data[0]._tms, n: 0 };
+      const topEvent = topValue(data.map(d => d.ev || '(no event)'));
+      const topModule = topRoot ? topValue([...topRoot[1].modules.entries()].flatMap(([v,n]) => Array(n).fill(v))) : null;
+      const topUser = topRoot ? topValue([...topRoot[1].users.entries()].flatMap(([v,n]) => Array(n).fill(v))) : null;
+      const rootLabel = topRoot ? decorateSidLabel(topRoot[0]) : '(none)';
+      const duration = topRoot ? Math.max(1, Math.round((topRoot[1].last - topRoot[1].first) / 1000)) : 0;
+      document.getElementById('impactSummary').innerHTML = [
+        impactItem('Top root blocker', rootLabel, topRoot ? `${topRoot[1].samples} samples across ${topRoot[1].waiters.size} waiter(s)` : ''),
+        impactItem('Peak blocked waiters', peak.n, `${fmtTs(peak.b)} bucket`),
+        impactItem('Blocked samples', data.length, `${uniqueWaiters} waiters, ${uniqueBlockers} blockers, ${allSids.size} SIDs`),
+        impactItem('Dominant workload', topModule ? topModule.value : '(none)', topUser ? `User ${topUser.value}` : ''),
+        impactItem('Top wait event', topEvent ? topEvent.value : '(none)', topEvent ? `${topEvent.count} samples` : ''),
+        impactItem('Top-root duration', `${duration}s`, topRoot ? `${fmtTs(topRoot[1].first)} to ${fmtTs(topRoot[1].last)}` : '')
+      ].join('');
+    }
+    function impactItem(label, value, sub) {
+      return `<div class="impact-item"><div class="impact-label">${escapeHtml(label)}</div><div class="impact-value">${escapeHtml(value)}</div><div class="impact-sub">${escapeHtml(sub || '')}</div></div>`;
+    }
+    function topValue(values) {
+      const counts = new Map();
+      for (const v of values) counts.set(v, (counts.get(v) || 0) + 1);
+      const top = [...counts.entries()].sort((a,b) => b[1] - a[1])[0];
+      return top ? { value: top[0], count: top[1] } : null;
+    }
+
+    let drillSeq = 0;
+    const drillRefs = new Map();
+    function resetDrillRefs() {
+      drillSeq = 0;
+      drillRefs.clear();
+    }
+    function drillRef(samples, title) {
+      const id = `d${++drillSeq}`;
+      drillRefs.set(id, { samples, title });
+      return id;
+    }
+    function wireDrillContainer(id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('click', e => {
+        const target = e.target.closest('[data-drill]');
+        if (!target || !el.contains(target)) return;
+        const ref = drillRefs.get(target.dataset.drill);
+        if (ref) showSamples(ref.samples, ref.title);
+      });
+    }
+    ['incidentLanes', 'flameGraph', 'chainMatrix'].forEach(wireDrillContainer);
+
+    function reportRange() {
+      const ms = bucketMs();
+      const start = Math.floor(data[0]._tms / ms) * ms;
+      const end = Math.floor(data[data.length - 1]._tms / ms) * ms + ms;
+      return { start, end, span: Math.max(ms, end - start) };
+    }
+    function bucketList() {
+      const ms = bucketMs();
+      const { start, end } = reportRange();
+      const out = [];
+      for (let b = start; b < end; b += ms) out.push(b);
+      return out;
+    }
+    function fmtShortTime(ms) {
+      const dt = new Date(ms);
+      const pad = n => String(n).padStart(2,'0');
+      return `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+    }
+    function roleLabel(row) {
+      if (row.waiterSamples.length && row.blockerSamples.length) return 'waiter + blocker';
+      if (row.blockerSamples.length) return 'blocker';
+      return 'waiter';
+    }
+    function rootColorMap(roots) {
+      const m = new Map();
+      roots.forEach((r, i) => m.set(r, PALETTE[i % PALETTE.length]));
+      return m;
+    }
+    function chainPathContains(sid, ancestor, parentOf) {
+      let cur = sid;
+      const seen = new Set();
+      while (cur && !seen.has(cur)) {
+        if (cur === ancestor) return true;
+        seen.add(cur);
+        cur = parentOf.get(cur);
+      }
+      return false;
+    }
+    function incidentModels() {
+      const { parentOf, allSids, waitCount, blockCount, rootAndDepth } = chainCache();
+      const incidents = new Map();
+      for (const d of data) {
+        const root = rootAndDepth(waiterKey(d)).root;
+        if (!incidents.has(root)) {
+          incidents.set(root, { root, samples: [], members: new Set(), first: d._tms, last: d._tms });
+        }
+        const inc = incidents.get(root);
+        inc.samples.push(d);
+        inc.members.add(waiterKey(d));
+        inc.members.add(blockerKey(d));
+        inc.first = Math.min(inc.first, d._tms);
+        inc.last = Math.max(inc.last, d._tms);
+      }
+      const models = [...incidents.values()].map(inc => {
+        for (const sid of allSids) {
+          if (rootAndDepth(sid).root === inc.root) inc.members.add(sid);
+        }
+        const rows = [...inc.members].map(sid => {
+          const info = rootAndDepth(sid);
+          const waiterSamples = inc.samples.filter(s => waiterKey(s) === sid);
+          const blockerSamples = inc.samples.filter(s => blockerKey(s) === sid);
+          const related = waiterSamples.concat(blockerSamples).sort((a,b) => a._tms - b._tms);
+          const downstream = inc.samples.filter(s => chainPathContains(waiterKey(s), sid, parentOf));
+          return {
+            sid,
+            depth: info.depth,
+            isRoot: sid === inc.root,
+            waiterSamples,
+            blockerSamples,
+            related,
+            downstream,
+            first: related[0]?._tms || inc.first,
+            last: related[related.length - 1]?._tms || inc.last,
+            activity: (waitCount.get(sid) || 0) + (blockCount.get(sid) || 0)
+          };
+        }).sort((a,b) => {
+          if (a.depth !== b.depth) return a.depth - b.depth;
+          if (b.activity !== a.activity) return b.activity - a.activity;
+          return a.sid.localeCompare(b.sid);
+        });
+        return { ...inc, rows };
+      }).sort((a,b) => b.samples.length - a.samples.length);
+      return models;
+    }
+
+    function renderIncidentLanes() {
+      const incidents = incidentModels();
+      const roots = incidents.map(i => i.root);
+      const colors = rootColorMap(roots);
+      const { start, span } = reportRange();
+      const ms = bucketMs();
+      document.getElementById('incidentLanes').innerHTML = incidents.map(inc => {
+        const rootId = identityFor(inc.root);
+        const module = rootId.module || '(no module)';
+        const user = rootId.user || '(unknown user)';
+        const duration = Math.max(1, Math.round((inc.last - inc.first) / 1000));
+        const rowHtml = inc.rows.map(row => {
+          const bars = [];
+          const laneColor = colors.get(inc.root);
+          function addBar(samples, klass) {
+            if (!samples.length) return;
+            const first = Math.min(...samples.map(s => s._tms));
+            const last = Math.max(...samples.map(s => s._tms)) + ms;
+            const left = Math.max(0, ((first - start) / span) * 100);
+            const width = Math.max(0.8, ((last - first) / span) * 100);
+            const ref = drillRef(samples, `${row.sid} ${klass === 'blocker' ? 'blocking' : 'waiting'} in root ${inc.root}`);
+            bars.push(`<span class="lane-bar ${klass}" data-drill="${ref}" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%;--lane-color:${laneColor}" title="${escapeHtml(roleLabel(row))}"></span>`);
+          }
+          addBar(row.blockerSamples, 'blocker');
+          addBar(row.waiterSamples, 'waiting');
+          return `<div class="incident-row">
+            <div class="lane-label">${row.isRoot ? '◆ ' : '&nbsp;'.repeat(row.depth * 3) + '↳ '}${escapeHtml(decorateSidLabel(row.sid))}<br><span style="color:var(--muted)">${roleLabel(row)}</span></div>
+            <div class="lane-track">${bars.join('')}</div>
+            <div class="lane-count">${row.related.length} samples</div>
+          </div>`;
+        }).join('');
+        return `<article class="incident">
+          <div class="incident-header">
+            <div><div class="metric-label">Root blocker</div><div class="incident-root">${escapeHtml(decorateSidLabel(inc.root))}</div></div>
+            <div><div class="metric-label">Samples</div><div class="metric-value">${inc.samples.length}</div></div>
+            <div><div class="metric-label">Waiters</div><div class="metric-value">${new Set(inc.samples.map(waiterKey)).size}</div></div>
+            <div><div class="metric-label">Workload</div><div class="metric-value">${escapeHtml(module)}<br><span style="font-weight:400;color:var(--muted)">${escapeHtml(user)}</span></div></div>
+            <div><div class="metric-label">Duration</div><div class="metric-value">${duration}s</div></div>
+          </div>
+          ${rowHtml}
+        </article>`;
+      }).join('');
+    }
+
+    function renderFlameGraph() {
+      const incidents = incidentModels();
+      const roots = incidents.map(i => i.root);
+      const colors = rootColorMap(roots);
+      const maxSamples = Math.max(1, ...incidents.map(i => i.samples.length));
+      const rows = [];
+      for (const inc of incidents) {
+        for (const row of inc.rows) {
+          const samples = row.isRoot ? inc.samples : row.downstream;
+          const width = Math.max(6, (samples.length / maxSamples) * 100);
+          const offset = Math.min(42, row.depth * 6);
+          const ref = drillRef(samples, `${row.sid} downstream samples under root ${inc.root}`);
+          rows.push(`<div class="flame-row">
+            <span class="flame-spacer" style="--flame-offset:${offset}%"></span>
+            <span class="flame-cell ${row.isRoot ? 'root' : ''}" data-drill="${ref}" style="flex-basis:${width.toFixed(3)}%;--flame-color:${colors.get(inc.root)}" title="${escapeHtml(samples.length + ' downstream samples')}">${escapeHtml(row.isRoot ? `◆ ${decorateSidLabel(row.sid)}` : `↳ ${decorateSidLabel(row.sid)}`)} · ${samples.length}</span>
+          </div>`);
+        }
+      }
+      document.getElementById('flameGraph').innerHTML = rows.join('');
+    }
+
+    function renderChainMatrix() {
+      const incidents = incidentModels();
+      const buckets = bucketList();
+      const roots = incidents.map(i => i.root);
+      const colors = rootColorMap(roots);
+      const ms = bucketMs();
+      const header = `<div class="matrix-row header"><div class="matrix-label">SID / bucket</div>${buckets.map(b => `<div>${fmtShortTime(b)}</div>`).join('')}</div>`;
+      const body = incidents.flatMap(inc => inc.rows.map(row => {
+        const cells = buckets.map(b => {
+          const waiterSamples = row.waiterSamples.filter(s => Math.floor(s._tms / ms) * ms === b);
+          const blockerSamples = row.blockerSamples.filter(s => Math.floor(s._tms / ms) * ms === b);
+          const samples = waiterSamples.concat(blockerSamples);
+          const state = waiterSamples.length && blockerSamples.length ? 'both' : waiterSamples.length ? 'waiting' : blockerSamples.length ? 'blocking' : '';
+          if (!state) return '<div class="matrix-cell"></div>';
+          const ref = drillRef(samples, `${row.sid} @ ${fmtTs(b)} (${state})`);
+          return `<button type="button" class="matrix-cell ${state}" data-drill="${ref}" style="--cell-color:${colors.get(inc.root)}" title="${escapeHtml(`${state}: ${samples.length} samples`)}"></button>`;
+        }).join('');
+        const label = `${row.isRoot ? '◆ ' : '&nbsp;'.repeat(row.depth * 3) + '↳ '}${escapeHtml(decorateSidLabel(row.sid))}`;
+        return `<div class="matrix-row"><div class="matrix-label">${label}</div>${cells}</div>`;
+      })).join('');
+      document.getElementById('chainMatrix').innerHTML = `<div class="matrix" style="--bucket-count:${buckets.length}">${header}${body}</div>`;
+    }
+
+    // Per-SID identifier resolver: walks the dataset once and picks the most
+    // frequent value of each identifier per SID (handles cases where a SID
+    // appears only as a blocker — uses the blocker-side enrichment fields).
+    let _identityCache = null;
+    function buildIdentityCache() {
+      const cache = new Map();
+      function bump(sid, field, val) {
+        if (!val) return;
+        if (!cache.has(sid)) cache.set(sid, {});
+        const e = cache.get(sid);
+        if (!e[field]) e[field] = new Map();
+        e[field].set(val, (e[field].get(val) || 0) + 1);
+      }
+      for (const d of data) {
+        const wk = waiterKey(d);
+        bump(wk, 'user',   d.user);
+        bump(wk, 'prog',   d.prog);
+        bump(wk, 'module', d.module);
+        bump(wk, 'action', d.action);
+        bump(wk, 'mach',   d.mach);
+        const bk = blockerKey(d);
+        bump(bk, 'user',   d.bUser);
+        bump(bk, 'prog',   d.bProg);
+        bump(bk, 'module', d.bMod);
+        bump(bk, 'action', d.bAct);
+        bump(bk, 'mach',   d.bMach);
+      }
+      // Collapse Map<value,count> → dominant value per field.
+      const result = new Map();
+      for (const [sid, fields] of cache) {
+        const out = {};
+        for (const [f, vs] of Object.entries(fields)) {
+          out[f] = [...vs.entries()].sort((a,b) => b[1] - a[1])[0][0];
+        }
+        result.set(sid, out);
+      }
+      return result;
+    }
+    function identityFor(sidKey) {
+      if (_identityCache === null) _identityCache = buildIdentityCache();
+      return _identityCache.get(sidKey) || {};
+    }
+    function activeIdToggles() {
+      return [...document.querySelectorAll('#idToggles input[type=checkbox]')]
+        .filter(cb => cb.checked).map(cb => cb.dataset.id);
+    }
+    // Appends selected identifier values to a base SID label, e.g. "1:287 · APP_ETL · ETL_LOAD".
+    function decorateSidLabel(sidKey) {
+      const sel = activeIdToggles();
+      if (sel.length === 0) return sidKey;
+      const id = identityFor(sidKey);
+      const parts = sel.map(k => id[k]).filter(Boolean);
+      return parts.length ? `${sidKey} · ${parts.join(' · ')}` : sidKey;
+    }
+
+    function fmtTs(ms) {
+      const dt = new Date(ms);
+      const pad = n => String(n).padStart(2,'0');
+      return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+    }
+
+    function bucketMs() { return (+bucketSel.value) * 1000; }
+
+    // Returns Map<string, {b, ck, n, samples[]}> keyed by `${b}|${ck}`.
+    function bucketize() {
+      const ms = bucketMs();
+      const groups = new Map();
+      for (const d of data) {
+        const b = Math.floor(d._tms / ms) * ms;
+        const ck = colorKey(d);
+        const key = `${b}|${ck}`;
+        let entry = groups.get(key);
+        if (!entry) { entry = {b, ck, n: 0, samples: []}; groups.set(key, entry); }
+        entry.n += 1;
+        entry.samples.push(d);
+      }
+      return groups;
+    }
+
+    function colorMapFor(keys) {
+      const sorted = [...keys].sort();
+      const m = new Map();
+      let palIdx = 0;
+      for (const k of sorted) {
+        const c = oemColorForKey(k);
+        m.set(k, c !== null ? c : PALETTE[palIdx++ % PALETTE.length]);
+      }
+      return m;
+    }
+
+    // ----- Overview stacked bar -----
+    function renderOverview() {
+      const groups = bucketize();
+      const buckets = [...new Set([...groups.values()].map(g => g.b))].sort((a,b)=>a-b);
+      const sums = new Map();
+      for (const g of groups.values()) sums.set(g.ck, (sums.get(g.ck)||0) + g.n);
+      const topCks = [...sums.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 12).map(x=>x[0]);
+      const topSet = new Set(topCks);
+      const cmap = colorMapFor(topCks);
+
+      const series = topCks.map(ck => ({
+        name: ck, type: 'bar', stack: 'total', barCategoryGap: '5%',
+        emphasis: { focus: 'series' },
+        itemStyle: { color: cmap.get(ck) },
+        data: buckets.map(b => [b, groups.get(`${b}|${ck}`)?.n || 0])
+      }));
+      const otherData = buckets.map(b => {
+        let n = 0;
+        for (const g of groups.values()) if (g.b === b && !topSet.has(g.ck)) n += g.n;
+        return [b, n];
+      });
+      if (otherData.some(d => d[1] > 0)) {
+        series.push({ name:'(other)', type:'bar', stack:'total', itemStyle:{color:'#bbb'}, data: otherData });
+      }
+
+      overviewChart.setOption({
+        tooltip: {
+          trigger: 'axis', axisPointer: { type: 'shadow' },
+          formatter: params => {
+            if (!params || !params.length) return '';
+            const b = params[0].value[0];
+            const total = params.reduce((s,p)=>s+(p.value[1]||0),0);
+            const lines = params
+              .filter(p => p.value[1] > 0)
+              .sort((a,b)=>b.value[1]-a.value[1])
+              .map(p => `<span style="display:inline-block;width:9px;height:9px;background:${p.color};margin-right:6px;border-radius:2px;"></span>${p.seriesName}: <b>${p.value[1]}</b>`);
+            return `<b>${fmtTs(b)}</b> (${bucketSel.options[bucketSel.selectedIndex].text}) — ${total} samples<br>${lines.join('<br>')}`;
+          }
+        },
+        legend: { bottom: 0, type: 'scroll', textStyle: { fontSize: 10 } },
+        grid: { left: 50, right: 20, top: 12, bottom: 40, containLabel: true },
+        xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
+        yAxis: { type: 'value', name: 'blocked samples', nameTextStyle:{fontSize:10}, minInterval: 1, axisLabel: { fontSize: 10 } },
+        series,
+        animation: false
+      }, true);
+
+      overviewChart.off('click');
+      overviewChart.on('click', params => {
+        const b = params.value[0];
+        const ck = params.seriesName;
+        const samples = ck === '(other)'
+          ? [...groups.values()].filter(g => g.b === b && !topSet.has(g.ck)).flatMap(g => g.samples)
+          : (groups.get(`${b}|${ck}`)?.samples || []);
+        showSamples(samples, `Bucket ${fmtTs(b)} · ${ck}`);
+      });
+    }
+
+    // ----- Swimlane (custom series Gantt) -----
+    function renderSwimlane() {
+      const ms = bucketMs();
+      const topN = Math.max(1, Math.min(200, +topNInput.value || 20));
+
+      const waiterCounts = new Map();
+      for (const d of data) {
+        const k = waiterKey(d);
+        waiterCounts.set(k, (waiterCounts.get(k)||0) + 1);
+      }
+      const rootTotals = new Map();
+      for (const [sid, n] of waiterCounts) {
+        const root = rootBlockerFor(sid);
+        rootTotals.set(root, (rootTotals.get(root) || 0) + n);
+      }
+      const topWaiters = [...waiterCounts.entries()]
+        .sort((a,b) => {
+          const ar = rootBlockerFor(a[0]), br = rootBlockerFor(b[0]);
+          const rd = (rootTotals.get(br) || 0) - (rootTotals.get(ar) || 0);
+          if (rd) return rd;
+          if (ar !== br) return ar.localeCompare(br);
+          return b[1] - a[1];
+        })
+        .slice(0, topN)
+        .map(x=>x[0]);
+      const topSet = new Set(topWaiters);
+
+      const byWaiter = new Map();
+      for (const d of data) {
+        const k = waiterKey(d);
+        if (!topSet.has(k)) continue;
+        if (!byWaiter.has(k)) byWaiter.set(k, []);
+        byWaiter.get(k).push(d);
+      }
+
+      // Build runs: merge adjacent samples (by bucket) with the same color key.
+      const runs = [];
+      for (const [waiter, samples] of byWaiter) {
+        samples.sort((a,b)=>a._tms - b._tms);
+        let cur = null;
+        for (const s of samples) {
+          const ck = colorKey(s);
+          const sb = Math.floor(s._tms / ms) * ms;
+          if (cur && cur.ck === ck && (sb - cur.lastBucket) <= ms) {
+            cur.end = sb + ms;
+            cur.lastBucket = sb;
+            cur.samples.push(s);
+          } else {
+            if (cur) runs.push(cur);
+            cur = { waiter, start: sb, end: sb + ms, ck, lastBucket: sb, samples: [s] };
+          }
+        }
+        if (cur) runs.push(cur);
+      }
+
+      const allCks = new Set(runs.map(r => r.ck));
+      const cmap = colorMapFor(allCks);
+
+      function renderItem(params, api) {
+        const yIdx = api.value(0);
+        const start = api.coord([api.value(1), yIdx]);
+        const end = api.coord([api.value(2), yIdx]);
+        const height = api.size([0, 1])[1] * 0.65;
+        const rect = echarts.graphic.clipRectByRect({
+          x: start[0], y: start[1] - height/2,
+          width: Math.max(1, end[0] - start[0]),
+          height
+        }, { x: params.coordSys.x, y: params.coordSys.y, width: params.coordSys.width, height: params.coordSys.height });
+        if (!rect) return;
+        return { type: 'rect', transition: ['shape'], shape: rect, style: { fill: api.visual('color'), opacity: 0.9 } };
+      }
+
+      const seriesData = runs.map(r => ({
+        name: r.ck,
+        value: [r.waiter, r.start, r.end, r.samples.length],
+        itemStyle: { color: cmap.get(r.ck) },
+        _run: r
+      }));
+
+      swimlaneChart.setOption({
+        tooltip: {
+          formatter: p => {
+            const r = p.data._run;
+            if (!r) return '';
+            const s = r.samples[0];
+            const evCounts = {};
+            for (const x of r.samples) evCounts[x.ev||'(none)'] = (evCounts[x.ev||'(none)']||0) + 1;
+            const evLines = Object.entries(evCounts).sort((a,b)=>b[1]-a[1]).slice(0,5)
+              .map(([e,n]) => `&nbsp;&nbsp;${e}: <b>${n}</b>`).join('<br>');
+            const blockers = new Set(r.samples.map(x => `${x.bInst||1}:${x.bSid},${x.bSer}`));
+            const id = identityFor(r.waiter);
+            const idLines = ['user','prog','module','action','mach']
+              .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+            return `<b>Waiter ${decorateSidLabel(r.waiter)}</b><br>` +
+                   `${fmtTs(r.start)} → ${fmtTs(r.end)} (${r.samples.length} samples)<br>` +
+                   (idLines ? `Identity:<br>${idLines}<br>` : '') +
+                   `Wait events:<br>${evLines}<br>` +
+                   `Blocker(s): ${[...blockers].slice(0,3).join(', ')}${blockers.size>3?'…':''}<br>` +
+                   `Color: ${r.ck}`;
+          }
+        },
+        grid: { left: 170, right: 20, top: 10, bottom: 30, containLabel: true },
+        xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
+        yAxis: {
+          type: 'category', data: topWaiters,
+          name: 'Waiter inst:sid', nameTextStyle:{fontSize:10},
+          axisLabel: { fontSize: 10, formatter: v => `${rootBlockerFor(v)} → ${decorateSidLabel(v)}` },
+          inverse: true
+        },
+        series: [{
+          type: 'custom',
+          renderItem,
+          encode: { x: [1,2], y: 0 },
+          data: seriesData
+        }],
+        animation: false
+      }, true);
+
+      swimlaneChart.off('click');
+      swimlaneChart.on('click', params => {
+        const r = params.data && params.data._run;
+        if (r) showSamples(r.samples, `Waiter ${r.waiter} · ${fmtTs(r.start)}–${fmtTs(r.end)}`);
+      });
+    }
+
+    // ----- Blocking chain map (deterministic layered graph) with scrubber -----
+    let treeBuckets = [];
+    let treeBucketMap = new Map();
+
+    function renderTree() {
+      const ms = bucketMs();
+      treeBucketMap = new Map();
+      for (const d of data) {
+        const b = Math.floor(d._tms / ms) * ms;
+        if (!treeBucketMap.has(b)) treeBucketMap.set(b, []);
+        treeBucketMap.get(b).push(d);
+      }
+      treeBuckets = [...treeBucketMap.keys()].sort((a,b)=>a-b);
+
+      const scrub = document.getElementById('treeScrub');
+      scrub.min = 0;
+      scrub.max = Math.max(0, treeBuckets.length - 1);
+
+      // Default to the bucket with most samples.
+      let bestIdx = 0, bestN = -1;
+      treeBuckets.forEach((b, i) => {
+        const n = treeBucketMap.get(b).length;
+        if (n > bestN) { bestN = n; bestIdx = i; }
+      });
+      scrub.value = bestIdx;
+      drawTreeAt(bestIdx);
+      scrub.oninput = () => drawTreeAt(+scrub.value);
+    }
+
+    function drawTreeAt(idx) {
+      const b = treeBuckets[idx];
+      if (b === undefined) {
+        treeChart.setOption({ title:{text:'No data',left:'center',top:'middle'}, series:[] }, true);
+        document.getElementById('treeTime').textContent = '—';
+        document.getElementById('treeStat').textContent = '';
+        return;
+      }
+      document.getElementById('treeTime').textContent = fmtTs(b);
+
+      const samples = treeBucketMap.get(b) || [];
+      document.getElementById('treeStat').textContent = `${samples.length} samples in ${bucketSel.options[bucketSel.selectedIndex].text} bucket`;
+
+      // Build nodes from union of waiters & blockers. Edges are drawn blocker -> waiter
+      // so root causes read left-to-right while preserving sample drilldown.
+      const nodeMap = new Map();
+      const edgeMap = new Map(); // key: blocker->waiter -> {label, samples[], ck}
+      const children = new Map();
+      const parentOf = new Map();
+
+      for (const s of samples) {
+        const wk = waiterKey(s);
+        const bk = blockerKey(s);
+        if (!nodeMap.has(wk)) nodeMap.set(wk, { id: wk, samples: [], isWaiter: false, isBlocker: false });
+        if (!nodeMap.has(bk)) nodeMap.set(bk, { id: bk, samples: [], isWaiter: false, isBlocker: false });
+        nodeMap.get(wk).isWaiter = true;
+        nodeMap.get(wk).samples.push(s);
+        nodeMap.get(bk).isBlocker = true;
+
+        if (!children.has(bk)) children.set(bk, new Set());
+        children.get(bk).add(wk);
+        parentOf.set(wk, bk);
+
+        const ek = `${bk}|${wk}`;
+        let e = edgeMap.get(ek);
+        if (!e) { e = { source: bk, target: wk, samples: [], ck: colorKey(s), events: new Set() }; edgeMap.set(ek, e); }
+        e.samples.push(s);
+        e.events.add(s.ev || '');
+      }
+
+      const cmap = colorMapFor(new Set([...edgeMap.values()].map(e => e.ck)));
+      const roots = [...nodeMap.keys()]
+        .filter(sid => !parentOf.has(sid))
+        .sort((a,b) => (nodeMap.get(b).samples.length + (children.get(b)?.size || 0)) - (nodeMap.get(a).samples.length + (children.get(a)?.size || 0)));
+      const positions = new Map();
+      let row = 0;
+      function placeSubtree(sid, depth) {
+        if (positions.has(sid)) return;
+        positions.set(sid, { depth, row: row++ });
+        const kids = [...(children.get(sid) || [])].sort((a,b) => {
+          const ad = (children.get(a)?.size || 0), bd = (children.get(b)?.size || 0);
+          if (ad !== bd) return bd - ad;
+          return (nodeMap.get(b).samples.length || 0) - (nodeMap.get(a).samples.length || 0);
+        });
+        for (const child of kids) placeSubtree(child, depth + 1);
+      }
+      for (const root of roots) {
+        placeSubtree(root, 0);
+        row++;
+      }
+      for (const sid of nodeMap.keys()) placeSubtree(sid, 0);
+      const maxDepth = Math.max(1, ...[...positions.values()].map(p => p.depth));
+      const xGap = Math.max(170, Math.min(260, 760 / maxDepth));
+      const yGap = Math.max(48, Math.min(86, 430 / Math.max(1, row - 1)));
+
+      const nodes = [...nodeMap.values()].map(n => {
+        let color, category;
+        if (n.isWaiter && n.isBlocker) { color = '#e67e22';      category = 'chain'; }
+        else if (n.isBlocker)          { color = '#c0392b';      category = 'blocker'; }
+        else                            { color = '#2980b9';      category = 'waiter'; }
+        const pos = positions.get(n.id) || { depth: 0, row: 0 };
+        return {
+          id: n.id, name: decorateSidLabel(n.id),
+          x: 80 + pos.depth * xGap,
+          y: 50 + pos.row * yGap,
+          symbolSize: 18 + Math.min(30, (n.samples.length + (children.get(n.id)?.size || 0)) * 2),
+          itemStyle: { color },
+          label: { show: true, fontSize: 10, position: 'right' },
+          category,
+          _node: n
+        };
+      });
+
+      const links = [...edgeMap.values()].map(e => {
+        const evLabel = [...e.events].filter(x=>x).slice(0,1)[0] || '';
+        return {
+          source: e.source, target: e.target,
+          value: e.samples.length,
+          label: {
+            show: e.samples.length > 1, fontSize: 9, color: '#444',
+            formatter: evLabel.length > 28 ? evLabel.slice(0,26)+'…' : evLabel
+          },
+          lineStyle: { color: cmap.get(e.ck) || '#666', width: 1.5 + Math.min(5, e.samples.length*0.22), curveness: 0.08, opacity: 0.82 },
+          symbol: ['none', 'arrow'], symbolSize: [6, 9],
+          _edge: e
+        };
+      });
+
+      treeChart.setOption({
+        tooltip: {
+          formatter: p => {
+            if (p.dataType === 'edge') {
+              const e = p.data._edge;
+              return `<b>${e.source} → ${e.target}</b><br>` +
+                     `${e.samples.length} samples<br>` +
+                     `Events: ${[...e.events].filter(x=>x).join('<br>') || '(none)'}`;
+            } else {
+              const n = p.data._node;
+              if (!n) return p.name;
+              const role = (n.isWaiter && n.isBlocker) ? 'chain' : n.isBlocker ? 'blocker' : 'waiter';
+              const id = identityFor(n.id);
+              const idLines = ['user','prog','module','action','mach']
+                .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+              return `<b>${n.id}</b> · ${role}<br>` +
+                     `${n.samples.length} blocked samples in this bucket` +
+                     (idLines ? `<br>Identity:<br>${idLines}` : '');
+            }
+          }
+        },
+        legend: { show: false },
+        series: [{
+          type: 'graph', layout: 'none',
+          categories: [
+            { name: 'waiter', itemStyle: { color: '#2980b9' } },
+            { name: 'chain',  itemStyle: { color: '#e67e22' } },
+            { name: 'blocker',itemStyle: { color: '#c0392b' } }
+          ],
+          roam: true, draggable: false, focusNodeAdjacency: true,
+          edgeLabel: { show: true, fontSize: 9 },
+          edgeSymbol: ['none','arrow'], edgeSymbolSize: 8,
+          data: nodes, links,
+          emphasis: { focus: 'adjacency', lineStyle: { width: 4 } }
+        }],
+        animation: false
+      }, true);
+
+      treeChart.off('click');
+      treeChart.on('click', params => {
+        if (params.dataType === 'edge') {
+          const e = params.data._edge;
+          showSamples(e.samples, `Chain ${e.source} → ${e.target} at ${fmtTs(b)}`);
+        } else if (params.data && params.data._node) {
+          showSamples(params.data._node.samples, `Node ${params.data._node.id} at ${fmtTs(b)}`);
+        }
+      });
+    }
+
+    // Play/pause
+    {
+      const btn = document.getElementById('treePlay');
+      let playing = false, timer = null;
+      btn.onclick = () => {
+        playing = !playing;
+        btn.innerHTML = playing ? '&#10073;&#10073;' : '&#9654;';
+        if (playing) {
+          timer = setInterval(() => {
+            const scrub = document.getElementById('treeScrub');
+            let v = (+scrub.value) + 1;
+            if (v > +scrub.max) v = 0;
+            scrub.value = v;
+            drawTreeAt(v);
+          }, 900);
+        } else {
+          clearInterval(timer); timer = null;
+        }
+      };
+    }
+
+    // ----- Chain timeline (Gantt) -----
+    // Builds a stable Y-axis by walking each SID's dominant parent across the
+    // entire window to its ultimate root, then groups + indents by depth.
+    function renderChainTimeline() {
+      const ms = bucketMs();
+
+      // 1) Dominant parent per SID across the entire window (stable chain structure).
+      const parentCounts = new Map();
+      for (const d of data) {
+        const wk = waiterKey(d), bk = blockerKey(d);
+        if (!parentCounts.has(wk)) parentCounts.set(wk, new Map());
+        const m = parentCounts.get(wk);
+        m.set(bk, (m.get(bk) || 0) + 1);
+      }
+      const parentOf = new Map();
+      for (const [sid, m] of parentCounts) {
+        parentOf.set(sid, [...m.entries()].sort((a,b) => b[1] - a[1])[0][0]);
+      }
+
+      // 2) Walk to ultimate root with cycle guard.
+      function rootAndDepth(sid) {
+        const seen = new Set([sid]);
+        let cur = sid, depth = 0;
+        while (parentOf.has(cur)) {
+          const p = parentOf.get(cur);
+          if (seen.has(p)) break;
+          seen.add(p); cur = p; depth++;
+        }
+        return { root: cur, depth };
+      }
+
+      // 3) Collect every SID that appears (as waiter or blocker) + activity.
+      const allSids = new Set();
+      const waitCount = new Map();
+      for (const d of data) {
+        const wk = waiterKey(d), bk = blockerKey(d);
+        allSids.add(wk); allSids.add(bk);
+        waitCount.set(wk, (waitCount.get(wk) || 0) + 1);
+      }
+      const sidInfo = new Map();
+      for (const sid of allSids) {
+        const { root, depth } = rootAndDepth(sid);
+        sidInfo.set(sid, { root, depth, act: waitCount.get(sid) || 0 });
+      }
+
+      // 4) Group by root, then build the visual row order.
+      const groups = new Map();
+      for (const [sid, info] of sidInfo) {
+        if (!groups.has(info.root)) groups.set(info.root, []);
+        groups.get(info.root).push(sid);
+      }
+      const groupTotal = root => groups.get(root).reduce((s, sid) => s + sidInfo.get(sid).act, 0);
+      const sortedRoots = [...groups.keys()].sort((a,b) => groupTotal(b) - groupTotal(a));
+
+      const yLabels = [];
+      const yMeta = [];
+      sortedRoots.forEach((root, gi) => {
+        if (gi > 0) {
+          yLabels.push('─ ─ ─ ─ ─ ─ ─ ─ ─ ─');
+          yMeta.push({ isSeparator: true });
+        }
+        const members = groups.get(root).slice().sort((a, b) => {
+          const ai = sidInfo.get(a), bi = sidInfo.get(b);
+          if (ai.depth !== bi.depth) return ai.depth - bi.depth;
+          return bi.act - ai.act;
+        });
+        for (const sid of members) {
+          const info = sidInfo.get(sid);
+          const isRoot = sid === root;
+          const decorated = decorateSidLabel(sid);
+          const label = isRoot
+            ? `◆ ${decorated}  (root)`
+            : `${'   '.repeat(info.depth)}↳ ${decorated}`;
+          yLabels.push(label);
+          yMeta.push({ sid, depth: info.depth, isRoot, root, isSeparator: false });
+        }
+      });
+
+      const sidToRow = new Map();
+      yMeta.forEach((m, i) => { if (!m.isSeparator) sidToRow.set(m.sid, i); });
+
+      // 5) Per (sid, bucket): aggregate waiter samples + blocker-target samples.
+      const cells = new Map();
+      for (const d of data) {
+        const b = Math.floor(d._tms / ms) * ms;
+        const wk = waiterKey(d), bk = blockerKey(d);
+        const ck = colorKey(d);
+
+        const wKey = `${wk}|${b}`;
+        if (!cells.has(wKey)) cells.set(wKey, { sid: wk, b, waiterSamples: [], blockerSamples: [], ckCounts: new Map() });
+        const wc = cells.get(wKey);
+        wc.waiterSamples.push(d);
+        wc.ckCounts.set(ck, (wc.ckCounts.get(ck) || 0) + 1);
+
+        const bKey = `${bk}|${b}`;
+        if (!cells.has(bKey)) cells.set(bKey, { sid: bk, b, waiterSamples: [], blockerSamples: [], ckCounts: new Map() });
+        const bc = cells.get(bKey);
+        bc.blockerSamples.push(d);
+        bc.ckCounts.set(ck, (bc.ckCounts.get(ck) || 0) + 1);
+      }
+
+      // 6) Color map covering every ck that shows up.
+      const allCks = new Set();
+      for (const c of cells.values()) for (const k of c.ckCounts.keys()) allCks.add(k);
+      const cmap = colorMapFor(allCks);
+
+      // 7) Build seriesData. value = [rowIdx, start, end, waiterN, blockerN]
+      const seriesData = [];
+      for (const c of cells.values()) {
+        const rowIdx = sidToRow.get(c.sid);
+        if (rowIdx === undefined) continue;
+        const dominantCk = [...c.ckCounts.entries()].sort((a,b) => b[1] - a[1])[0][0];
+        seriesData.push({
+          value: [rowIdx, c.b, c.b + ms, c.waiterSamples.length, c.blockerSamples.length],
+          itemStyle: { color: cmap.get(dominantCk) || '#999' },
+          _cell: c,
+          _ck: dominantCk
+        });
+      }
+
+      function renderItem(params, api) {
+        const yIdx = api.value(0);
+        const start = api.coord([api.value(1), yIdx]);
+        const end   = api.coord([api.value(2), yIdx]);
+        const h = api.size([0, 1])[1] * 0.7;
+        const wCount = api.value(3);
+        const bCount = api.value(4);
+        const filled = wCount > 0;
+        const rect = echarts.graphic.clipRectByRect({
+          x: start[0], y: start[1] - h/2,
+          width: Math.max(2, end[0] - start[0] - 1),
+          height: h
+        }, { x: params.coordSys.x, y: params.coordSys.y, width: params.coordSys.width, height: params.coordSys.height });
+        if (!rect) return;
+        const fill = api.visual('color');
+        return {
+          type: 'rect', shape: rect,
+          style: filled
+            ? { fill, opacity: 0.9, stroke: bCount > 0 ? '#2c3e50' : fill, lineWidth: bCount > 0 ? 1.8 : 0 }
+            : { fill: 'transparent', stroke: fill, lineWidth: 1.6 }
+        };
+      }
+
+      chainChart.setOption({
+        tooltip: {
+          formatter: p => {
+            const c = p.data && p.data._cell;
+            if (!c) return '';
+            const role = c.waiterSamples.length > 0 && c.blockerSamples.length > 0 ? 'waiter + blocker'
+                       : c.waiterSamples.length > 0 ? 'waiter'
+                       : 'blocker only';
+            const evCounts = new Map();
+            for (const s of c.waiterSamples) evCounts.set(s.ev || '', (evCounts.get(s.ev || '') || 0) + 1);
+            const evLines = [...evCounts.entries()].sort((a,b) => b[1] - a[1]).slice(0, 4)
+              .map(([e, n]) => `&nbsp;&nbsp;${escapeHtml(e)}: <b>${n}</b>`).join('<br>');
+            const waiterIncoming = new Set(c.blockerSamples.map(s => waiterKey(s)));
+            const id = identityFor(c.sid);
+            const idLines = ['user','prog','module','action','mach']
+              .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+            return `<b>SID ${c.sid}</b> · ${role}<br>` +
+                   `${fmtTs(c.b)} (+${(ms/1000)|0}s)<br>` +
+                   (idLines ? `Identity:<br>${idLines}<br>` : '') +
+                   (c.waiterSamples.length ? `Waiting: <b>${c.waiterSamples.length}</b> samples<br>${evLines}<br>` : '') +
+                   (c.blockerSamples.length ? `Blocking ${waiterIncoming.size} waiter(s): ${c.blockerSamples.length} downstream samples<br>` : '') +
+                   `Color key: ${escapeHtml(p.data._ck)}`;
+          }
+        },
+        grid: { left: 150, right: 20, top: 12, bottom: 38, containLabel: true },
+        xAxis: { type: 'time', axisLabel: { fontSize: 10, hideOverlap: true } },
+        yAxis: {
+          type: 'category',
+          data: yLabels,
+          inverse: true,
+          axisTick: { show: false },
+          axisLine: { show: false },
+          axisLabel: {
+            fontSize: 10,
+            fontFamily: 'ui-monospace, SF Mono, Menlo, Consolas, monospace',
+            formatter: (val, idx) => {
+              const m = yMeta[idx];
+              if (!m) return val;
+              if (m.isSeparator) return `{sep|${val}}`;
+              if (m.isRoot)      return `{root|${val}}`;
+              return `{ord|${val}}`;
+            },
+            rich: {
+              sep:  { color: '#bbb', fontStyle: 'italic' },
+              root: { color: '#2c3e50', fontWeight: 'bold' },
+              ord:  { color: '#34495e' }
+            }
+          },
+          splitLine: { show: true, lineStyle: { color: '#f3f4f6' } }
+        },
+        dataZoom: [
+          { type: 'inside', xAxisIndex: 0 },
+          { type: 'slider', xAxisIndex: 0, height: 14, bottom: 6 }
+        ],
+        series: [{
+          type: 'custom',
+          renderItem,
+          encode: { x: [1, 2], y: 0 },
+          data: seriesData
+        }],
+        animation: false
+      }, true);
+
+      chainChart.off('click');
+      chainChart.on('click', params => {
+        const c = params.data && params.data._cell;
+        if (!c) return;
+        const samples = c.waiterSamples.concat(c.blockerSamples);
+        showSamples(samples, `SID ${c.sid} @ ${fmtTs(c.b)} — ${samples.length} related samples`);
+      });
+    }
+
+    // ----- Sample detail table -----
+    function showSamples(samples, title) {
+      const wrap = document.getElementById('sampleTableWrap');
+      if (!samples || samples.length === 0) {
+        wrap.innerHTML = '<div class="empty">No samples.</div>';
+        return;
+      }
+      samples = samples.slice().sort((a,b)=>a._tms - b._tms);
+      const rows = samples.slice(0, 500).map(s => `
+        <tr>
+          <td>${fmtTs(s._tms)}</td>
+          <td>${s.inst||1}:${s.sid},${s.serial||''}</td>
+          <td><span class="pill ${s.bStatus==='VALID'?'warn':(s.bStatus==='NOT IN WAIT'?'chain':'')}">${s.bInst||1}:${s.bSid},${s.bSer||''} ${s.bStatus?'· '+s.bStatus:''}</span></td>
+          <td>${escapeHtml(s.ev||'')}</td>
+          <td>${escapeHtml(s.wc||'')}</td>
+          <td><code>${s.sqlId||''}</code></td>
+          <td>${escapeHtml(s.user||'')}</td>
+          <td>${escapeHtml(s.prog||'')}</td>
+          <td>${escapeHtml(s.module||'')}</td>
+          <td>${escapeHtml(s.action||'')}</td>
+          <td>${escapeHtml(s.mach||'')}</td>
+          <td>${escapeHtml(s.bEv||'')}${s.bState?'<br><small>'+s.bState+'</small>':''}</td>
+          <td><code>${s.bSqlId||''}</code></td>
+          <td>${s.conId||''}</td>
+        </tr>`).join('');
+      const truncNote = samples.length > 500 ? `<div class="footnote">Showing first 500 of ${samples.length} samples.</div>` : '';
+      wrap.innerHTML = `
+        <div style="font-size:12px;color:#555;margin-bottom:6px;"><b>${escapeHtml(title)}</b> — ${samples.length} samples</div>
+        <div style="max-height:380px;overflow:auto;">
+          <table class="samples">
+            <thead><tr>
+              <th>Time</th><th>Waiter</th><th>Blocker</th><th>Wait event</th><th>Class</th>
+              <th>SQL_ID</th><th>User</th><th>Program</th><th>Module</th><th>Action</th><th>Machine</th>
+              <th>Blocker doing</th><th>Blocker SQL</th><th>CON</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${truncNote}`;
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    // ----- Wire up controls -----
+    function renderAll() {
+      resetDrillRefs();
+      renderImpactSummary();
+      renderIncidentLanes();
+      renderFlameGraph();
+      renderChainMatrix();
+      renderOverview();
+      renderSwimlane();
+      renderTree();
+      renderChainTimeline();
+    }
+    bucketSel.addEventListener('change', renderAll);
+    colorBySel.addEventListener('change', renderAll);
+    topNInput.addEventListener('change', renderAll);
+    document.querySelectorAll('#idToggles input[type=checkbox]')
+      .forEach(cb => cb.addEventListener('change', renderAll));
+    renderAll();
+  })();
+  </script>
+</body>
+</html>

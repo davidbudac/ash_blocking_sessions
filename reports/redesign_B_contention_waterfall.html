@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Contention Waterfall — redesign preview B</title>
+<style>
+  :root{--bg:#f4f6f8;--card:#fff;--ink:#1f2a36;--muted:#6b7887;--line:#e3e7ec;--crit:#c0392b;--ok:#1e8449;--accent:#2c5f86}
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);font-size:13.5px;line-height:1.5}
+  .wrap{max-width:1240px;margin:0 auto;padding:22px 22px 60px}
+  .topline{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+  .topline h1{font-size:17px;font-weight:650;margin:0}
+  .topline .meta{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#eef1f4;padding:0 5px;border-radius:4px;font-size:.9em}
+  .ribbon{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--crit);border-radius:9px;padding:12px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;box-shadow:0 1px 3px rgba(20,30,45,.05)}
+  .ribbon .chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--crit);background:#fdecea;padding:3px 10px;border-radius:20px}
+  .ribbon .txt{font-size:14px}
+  .ribbon .txt b{color:var(--crit)}
+  .kpis{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+  .kpi{flex:1 1 130px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 13px}
+  .kpi .num{font-size:20px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+  .kpi.hot .num{color:var(--crit)}
+  .kpi .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:5px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px 6px;box-shadow:0 1px 2px rgba(20,30,45,.05);margin-top:6px}
+  .panel h2{font-size:11.5px;margin:2px 2px 8px;color:#8593a2;font-weight:700;text-transform:uppercase;letter-spacing:.6px}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11.5px;color:#4a5a6a;margin:2px 4px 6px;align-items:center}
+  .legend .g{display:inline-flex;align-items:center;gap:5px}
+  .legend .chip{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .legend .role{font-weight:600}
+  #heat{height:52px}
+  #wf{height:640px}
+  .foot{color:var(--muted);font-size:11px;margin:8px 4px 2px}
+  .hint{color:var(--muted);font-size:11px}
+  #detail{margin-top:10px}
+  table.det{width:100%;border-collapse:collapse;font-size:12px}
+  table.det th,table.det td{text-align:left;padding:5px 8px;border-bottom:1px solid #f0f2f5;vertical-align:top}
+  table.det th{color:var(--muted);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px}
+  .empty{color:var(--muted);font-style:italic;padding:14px;text-align:center}
+  .note{color:var(--muted);font-size:11.5px;margin-top:14px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script src="_preview_data.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="topline"><h1>Contention Waterfall</h1><div class="meta" id="meta"></div></div>
+  <div class="ribbon" id="ribbon"></div>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="panel">
+    <h2>Concurrent blocked sessions</h2>
+    <div id="heat"></div>
+  </div>
+  <div class="panel">
+    <h2>Blocking chains over time — one lane per session, grouped under its root cause</h2>
+    <div class="legend" id="legend"></div>
+    <div id="wf"></div>
+    <div class="foot">Each bar spans a session's blocked run at ≈10&nbsp;s resolution; colour = wait event. <b style="color:#c0392b">●</b> root blocker (outlined = idle/holding), <b style="color:#e67e22">◆</b> blocks &amp; waits, <b style="color:#2e86c1">·</b> waiter. A <b>▸</b> cap at the right edge = still blocking at window end. Click a bar for detail.</div>
+    <div id="detail"><div class="empty">Click a bar to see the sessions and SQL in that chain.</div></div>
+  </div>
+  <div class="note" id="note"></div>
+</div>
+
+<script>
+(function(){
+  var META=window.ASH_META, DATA=window.ASH_DATA, M=window.ASHEngine.buildModel(DATA,META);
+  var SAMPLE_MS=M.SAMPLE_MS;
+  var beginMs=new Date(META.beginTime).getTime(), endMs=new Date(META.endTime).getTime();
+
+  var WC_COLOR={"Application":"#c0392b","Concurrency":"#7b241c","Configuration":"#8e44ad","Cluster":"#c99a06","User I/O":"#2e86c1","Commit":"#e67e22","System I/O":"#16a085","Other":"#7f8c8d"};
+  // per-event distinct shades within class family
+  var EV_COLOR={
+    "enq: TX - row lock contention":"#c0392b",
+    "enq: TM - contention":"#e8543c",
+    "enq: TX - allocate ITL entry":"#8e44ad",
+    "buffer busy waits":"#7b241c",
+    "library cache lock":"#a93226",
+    "library cache pin":"#cd6155",
+    "gc buffer busy acquire":"#c99a06",
+    "read by other session":"#2e86c1"
+  };
+  function evColor(ev,wc){ return EV_COLOR[ev] || WC_COLOR[wc] || "#7f8c8d"; }
+  function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+  function fmtDur(ms){var s=Math.round(ms/1000);if(s<60)return s+"s";var m=Math.floor(s/60),r=s%60;if(m<60)return m+"m"+(r?" "+r+"s":"");return Math.floor(m/60)+"h "+(m%60)+"m";}
+  function pad2(n){return(n<10?"0":"")+n;}
+  function hhmmMs(ms){var d=new Date(ms);return pad2(d.getHours())+":"+pad2(d.getMinutes());}
+  function dominantKey(o){var b=null,bc=-1;for(var k in o){if(o[k]>bc){bc=o[k];b=k;}}return b;}
+  var wcOfEvent={}; DATA.forEach(function(r){if(r.ev)wcOfEvent[r.ev]=r.wc;});
+  var identOf=M.identity;
+  function shortId(key){var id=identOf[key]||{};return "SID "+key.split(":")[1]+" · "+(id.user||"?")+" · "+(id.module||"?");}
+  function laneLabel(key){var id=identOf[key]||{};return "SID "+key.split(":")[1]+" · "+(id.module||id.user||"?");}
+
+  // ---- meta + verdict ----
+  document.getElementById("meta").innerHTML=esc(META.dbName)+" · "+hhmmMs(beginMs)+"–"+hhmmMs(endMs)+" on "+esc(String(META.beginTime).slice(0,10))+(META.conIdFilter?" · CON_ID "+esc(META.conIdFilter):"");
+  var top=M.roots[0], anyOngoing=M.roots.some(function(r){return r.stillActive;});
+  var whoTop=(top.user||"?")+" · "+(top.module||"?");
+  document.getElementById("ribbon").innerHTML=
+    '<span class="chip">●&nbsp;'+(anyOngoing?"ongoing":"cleared")+'</span>'+
+    '<span class="txt">Root cause: <b>SID '+esc(top.sid)+'</b> ('+esc(whoTop)+') held a <b>'+esc((top.topEvent||"lock").replace(/^enq: /,"").replace(/ contention$/,""))+'</b> lock, blocking '+top.victims+' session'+(top.victims>1?'s':'')+' for ≈'+fmtDur(top.blockedMs)+(top.stillActive?' — <b>still active at window end</b>.':' — cleared before window end.')+'</span>';
+
+  var totalMs=M.totalSamples*SAMPLE_MS;
+  var waiterSet={};DATA.forEach(function(r){if(r.bSid!=null)waiterSet[r.inst+":"+r.sid]=1;});
+  var deepest=1+Math.max.apply(null,Object.keys(M.parent).map(function(k){return M.depthOf(k);}).concat([0]));
+  document.getElementById("kpis").innerHTML=
+    '<div class="kpi hot"><div class="num">'+fmtDur(totalMs)+'</div><div class="lbl">Blocked session-time</div></div>'+
+    '<div class="kpi"><div class="num">'+Object.keys(waiterSet).length+'</div><div class="lbl">Sessions blocked</div></div>'+
+    '<div class="kpi"><div class="num">'+M.roots.length+'</div><div class="lbl">Chains</div></div>'+
+    '<div class="kpi"><div class="num">'+deepest+'</div><div class="lbl">Deepest chain</div></div>'+
+    '<div class="kpi hot"><div class="num">'+M.peak.count+'</div><div class="lbl">Peak @ '+hhmmMs(M.peak.ms)+'</div></div>';
+
+  // ---- build lanes (root-grouped, depth-indented) ----
+  function isMid(key){ return !!(M.children[key] && M.children[key].length) && identOf[key] && identOf[key].isWaiter; }
+  var lanes=[]; // {name, key, kind, depth}
+  function laneName(key,depth,kind){
+    var glyph=kind==="root"?"● ":kind==="mid"?"◆ ":depth>=2?"·· ":"· ";
+    return glyph+laneLabel(key);
+  }
+  M.roots.forEach(function(r){
+    lanes.push({name:laneName(r.key,0,"root"),key:r.key,kind:"root",depth:0,root:r.key});
+    // downstream waiters of this root
+    var ds=Object.keys(waiterSet).filter(function(w){return M.rootOf(w)===r.key;});
+    ds.sort(function(a,b){var da=M.depthOf(a),db=M.depthOf(b);if(da!==db)return da-db;return (M.perKeySamples[b]||0)-(M.perKeySamples[a]||0);});
+    ds.forEach(function(w){ lanes.push({name:laneName(w,M.depthOf(w),isMid(w)?"mid":"leaf"),key:w,kind:isMid(w)?"mid":"leaf",depth:M.depthOf(w),root:r.key}); });
+  });
+  var laneNames=lanes.map(function(l){return l.name;});
+  var laneMeta={}; lanes.forEach(function(l,i){laneMeta[l.name]={i:i,kind:l.kind};});
+
+  // ---- runs per lane ----
+  function runsForWaiter(key){
+    var byT={}; DATA.forEach(function(r){ if(r.bSid==null)return; if((r.inst+":"+r.sid)!==key)return; (byT[r.t]||(byT[r.t]={})); byT[r.t][r.ev]=(byT[r.t][r.ev]||0)+1; });
+    var ts=Object.keys(byT).sort(); var runs=[],cur=null;
+    ts.forEach(function(t){var ev=dominantKey(byT[t]),ms=new Date(t).getTime();
+      if(cur && (ms-cur.lastMs)<=1.5*SAMPLE_MS && cur.ev===ev){cur.lastMs=ms;}
+      else{if(cur)runs.push(cur);cur={startMs:ms,lastMs:ms,ev:ev};}});
+    if(cur)runs.push(cur);
+    runs.forEach(function(r){r.endMs=r.lastMs+SAMPLE_MS;r.wc=wcOfEvent[r.ev];});
+    return runs;
+  }
+  var rootInfo={}; M.roots.forEach(function(r){rootInfo[r.key]=r;});
+
+  var segs=[]; // {value:[startMs,endMs,laneIdx], seg}
+  lanes.forEach(function(l,li){
+    if(l.kind==="root"){
+      var r=rootInfo[l.key];
+      var last=new Date(r.last).getTime();
+      segs.push({value:[new Date(r.first).getTime(), last+SAMPLE_MS, li],
+        kind:"root", idle:r.idle, ongoing:(endMs-last)<=2*SAMPLE_MS,
+        color:evColor(r.topEvent,r.topClass), ev:r.idle?"(idle — holding lock)":r.topEvent, key:l.key});
+    } else {
+      var runs=runsForWaiter(l.key);
+      runs.forEach(function(rn,idx){
+        var isLast=idx===runs.length-1;
+        segs.push({value:[rn.startMs, rn.endMs, li], kind:l.kind, idle:false,
+          ongoing:isLast && (endMs-rn.lastMs)<=2*SAMPLE_MS,
+          color:evColor(rn.ev,rn.wc), ev:rn.ev, key:l.key});
+      });
+    }
+  });
+
+  // ---- heat strip (concurrency) ----
+  var heat=echarts.init(document.getElementById("heat"));
+  heat.setOption({
+    grid:{left:200,right:26,top:6,bottom:6},
+    tooltip:{trigger:"axis",valueFormatter:function(v){return v+" blocked";}},
+    xAxis:{type:"time",min:beginMs,max:endMs,show:false},
+    yAxis:{type:"value",show:false,max:M.peak.count},
+    series:[{type:"line",smooth:true,symbol:"none",data:M.perSample.map(function(s){return [s.ms,s.count];}),
+      lineStyle:{color:"#c0392b",width:1},areaStyle:{color:"rgba(192,57,43,0.14)"},
+      markPoint:{silent:true,symbolSize:1,data:[{coord:[M.peak.ms,M.peak.count],label:{formatter:"peak "+M.peak.count,color:"#c0392b",fontSize:10,position:"top",fontWeight:700}}]},
+      markLine:{silent:true,symbol:"none",lineStyle:{color:"#c0392b",type:"dashed",width:1},data:[{xAxis:endMs}]}}]
+  });
+
+  // ---- waterfall ----
+  function renderItem(params,api){
+    var start=api.coord([api.value(0),api.value(2)]);
+    var end=api.coord([api.value(1),api.value(2)]);
+    var bandH=api.size([0,1])[1];
+    var h=Math.max(7,Math.min(16,bandH*0.6));
+    var d=segs[params.dataIndex];
+    var x=start[0], w=Math.max(2,end[0]-start[0]), y=start[1]-h/2;
+    var cs=params.coordSys;
+    var children=[];
+    var rect={x:x,y:y,width:w,height:h};
+    var clipped=echarts.graphic.clipRectByRect(rect,{x:cs.x,y:cs.y,width:cs.width,height:cs.height});
+    if(!clipped) return;
+    if(d.kind==="root" && d.idle){
+      children.push({type:"rect",shape:Object.assign({r:2},clipped),style:{fill:"#fff",stroke:d.color,lineWidth:1.3,lineDash:[3,2],opacity:0.95}});
+    } else {
+      children.push({type:"rect",shape:Object.assign({r:2},clipped),style:{fill:d.color,opacity:d.kind==="root"?0.9:0.92}});
+    }
+    // ongoing arrow cap at right edge
+    if(d.ongoing && clipped.x+clipped.width>=cs.x+cs.width-3){
+      var ax=cs.x+cs.width; var cy=start[1];
+      children.push({type:"polygon",shape:{points:[[ax-1,cy-h/2-1],[ax+7,cy],[ax-1,cy+h/2+1]]},style:{fill:"#c0392b"}});
+    }
+    return {type:"group",children:children};
+  }
+
+  var wf=echarts.init(document.getElementById("wf"));
+  wf.setOption({
+    animation:false,
+    grid:{left:200,right:26,top:8,bottom:46},
+    tooltip:{trigger:"item",formatter:function(p){var d=segs[p.dataIndex];if(!d)return"";
+      return '<b>'+esc(shortId(d.key))+'</b><br>'+esc(d.ev)+'<br>'+hhmmMs(d.value[0])+" – "+hhmmMs(d.value[1])+' ('+fmtDur(d.value[1]-d.value[0])+')'+(d.ongoing?'<br><span style="color:#c0392b">▸ still active at window end</span>':'');}},
+    xAxis:{type:"time",min:beginMs,max:endMs,position:"bottom",axisLabel:{color:"#8593a2",fontSize:11},axisLine:{lineStyle:{color:"#d5dbe1"}},splitLine:{show:true,lineStyle:{color:"#f0f2f5"}}},
+    yAxis:{type:"category",data:laneNames,inverse:true,axisTick:{show:false},axisLine:{show:false},
+      axisLabel:{interval:0,fontSize:11,
+        formatter:function(v){var m=laneMeta[v];var tag=m&&m.kind==="root"?"root":m&&m.kind==="mid"?"mid":"leaf";return "{"+tag+"|"+v+"}";},
+        rich:{root:{color:"#c0392b",fontWeight:"bold"},mid:{color:"#b9631a"},leaf:{color:"#59677a"}}},
+      splitLine:{show:false}},
+    dataZoom:[{type:"inside",xAxisIndex:0,filterMode:"none"},{type:"slider",xAxisIndex:0,height:16,bottom:16,filterMode:"none"}],
+    series:[{type:"custom",renderItem:renderItem,encode:{x:[0,1],y:2},data:segs,clip:true}]
+  });
+
+  echarts.connect([heat,wf]);
+  window.addEventListener("resize",function(){heat.resize();wf.resize();});
+
+  // ---- click -> detail table for that chain ----
+  wf.on("click",function(p){
+    var d=segs[p.dataIndex]; if(!d)return;
+    var rootKey=M.rootOf(d.key)===d.key?d.key:M.rootOf(d.key);
+    // include root + all downstream of this root
+    var keys={}; keys[rootKey]=1; Object.keys(waiterSet).forEach(function(w){if(M.rootOf(w)===rootKey)keys[w]=1;});
+    var rows=DATA.filter(function(r){return r.bSid!=null && keys[r.inst+":"+r.sid];});
+    // aggregate per waiter
+    var agg={}; rows.forEach(function(r){var w=r.inst+":"+r.sid;var a=agg[w]||(agg[w]={key:w,sid:r.sid,depth:M.depthOf(w),samples:0,ev:{},sql:{}});a.samples++;if(r.ev)a.ev[r.ev]=(a.ev[r.ev]||0)+1;if(r.sqlId)a.sql[r.sqlId]=(a.sql[r.sqlId]||0)+1;});
+    var list=Object.keys(agg).map(function(k){return agg[k];}).sort(function(x,y){if(x.depth!==y.depth)return x.depth-y.depth;return y.samples-x.samples;});
+    var rInfo=rootInfo[rootKey];
+    var body=list.map(function(a){return '<tr><td style="padding-left:'+(8+a.depth*16)+'px">'+(a.depth===0?"● ":a.depth>=1&&M.children[a.key]?"◆ ":"· ")+'SID '+esc(a.sid)+'</td>'+
+      '<td>'+esc((identOf[a.key]||{}).user||"?")+' · '+esc((identOf[a.key]||{}).module||"?")+'</td>'+
+      '<td>'+esc((dominantKey(a.ev)||"").replace(/^enq: /,""))+'</td>'+
+      '<td><code>'+esc(dominantKey(a.sql)||"—")+'</code></td>'+
+      '<td style="text-align:right;font-variant-numeric:tabular-nums">'+fmtDur(a.samples*SAMPLE_MS)+'</td></tr>';}).join("");
+    document.getElementById("detail").innerHTML=
+      '<div class="hint" style="margin-bottom:6px">Chain rooted at <b>SID '+esc(rInfo.sid)+'</b> ('+esc((rInfo.user||"?")+" · "+(rInfo.module||"?"))+') · '+list.length+' sessions</div>'+
+      '<table class="det"><thead><tr><th>Session (indent = depth)</th><th>Identity</th><th>Waiting on</th><th>SQL</th><th style="text-align:right">Blocked</th></tr></thead><tbody>'+body+'</tbody></table>';
+  });
+
+  // legend
+  var evs=M.events.slice();
+  document.getElementById("legend").innerHTML=
+    evs.map(function(ev){return '<span class="g"><span class="chip" style="background:'+evColor(ev,wcOfEvent[ev])+'"></span>'+esc(ev.replace(/^enq: /,""))+'</span>';}).join("");
+
+  document.getElementById("note").innerHTML="Preview B of 3 · time-first “trace waterfall” · "+lanes.length+" lanes across "+M.roots.length+" chains. The heat strip on top is total concurrent blocked sessions; the waterfall shows each session's blocked runs, grouped under its root cause.";
+})();
+</script>
+</body>
+</html>
