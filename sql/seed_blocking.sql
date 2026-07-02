@@ -23,6 +23,8 @@
 --
 -- Prints the start timestamp (UTC + local) and the suggested report window.
 
+WHENEVER SQLERROR EXIT FAILURE
+
 ALTER SESSION SET CONTAINER = PDB1;
 ALTER SESSION SET NLS_DATE_FORMAT      = 'YYYY-MM-DD HH24:MI:SS';
 ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS';
@@ -85,14 +87,11 @@ INSERT INTO ASH_TEST.LOCK_TARGET_TM VALUES (1, 0, 'tm row 1');
 INSERT INTO ASH_TEST.LOCK_TARGET_TM VALUES (2, 0, 'tm row 2');
 COMMIT;
 
-PROMPT
-PROMPT === Submitting blocking jobs ===
-
+-- Drop any stale ASH_DEMO_% jobs from a previous run that DROP USER CASCADE
+-- couldn't catch (e.g. a job that ended up owned by SYS). Needs DBA views,
+-- so it runs here — before we drop down to the ASH_TEST connection.
 DECLARE
-  l_now TIMESTAMP := SYSTIMESTAMP;
 BEGIN
-  -- Drop any stale demo jobs from a previous run (in case ASH_TEST CASCADE
-  -- didn't catch a job owned by SYS in this schema).
   FOR j IN (SELECT job_name, owner
               FROM dba_scheduler_jobs
              WHERE job_name LIKE 'ASH_DEMO_%') LOOP
@@ -101,7 +100,25 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN NULL;
     END;
   END LOOP;
+END;
+/
 
+PROMPT
+PROMPT === Reconnecting as ASH_TEST to submit jobs ===
+-- The jobs MUST be created from a real ASH_TEST connection, not the SYSDBA
+-- session: a job created from SYSDBA runs its slave session with session
+-- user SYS (only the schema is ASH_TEST), so ASH records USER_ID = 0 and the
+-- whole report shows user "SYS". Submitted by ASH_TEST itself, the slaves
+-- run (and are sampled) as ASH_TEST. Uses the PDB's default service on the
+-- local listener (db_domain = world).
+CONNECT ash_test/"ash_test_p4ss"@//localhost/pdb1.world
+
+PROMPT
+PROMPT === Submitting blocking jobs ===
+
+DECLARE
+  l_now TIMESTAMP := SYSTIMESTAMP;
+BEGIN
   ---------------------------------------------------------------
   -- Pattern A: one blocker, three waiters on row 1.
   -- Each job tags itself with a distinct MODULE/ACTION so the report's
