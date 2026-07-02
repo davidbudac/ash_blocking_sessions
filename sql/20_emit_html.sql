@@ -122,7 +122,8 @@ BEGIN
              dbid, snap_id, sample_id, sample_time, instance_number,
              session_id, session_serial#, blocking_inst_id, blocking_session,
              blocking_session_serial#, blocking_session_status, event, wait_class,
-             session_state, sql_id, module, action, program, machine, user_id, con_id
+             session_state, sql_id, module, action, program, machine, user_id, con_id,
+             current_obj#
         FROM dba_hist_active_sess_history
        WHERE sample_time BETWEEN l_begin AND l_end
          AND (l_con_id IS NULL OR con_id = l_con_id)
@@ -139,6 +140,8 @@ BEGIN
                'bStatus' VALUE w.blocking_session_status,
                'ev'      VALUE w.event,
                'wc'      VALUE w.wait_class,
+               'obj'     VALUE CASE WHEN ow.owner IS NOT NULL
+                                    THEN ow.owner || '.' || ow.object_name END,
                'sqlId'   VALUE w.sql_id,
                'module'  VALUE w.module,
                'action'  VALUE w.action,
@@ -170,8 +173,12 @@ BEGIN
             AND b.instance_number  = NVL(w.blocking_inst_id, w.instance_number)
             AND b.session_id       = w.blocking_session
             AND b.session_serial#  = w.blocking_session_serial#
-      LEFT JOIN dba_users u_w ON u_w.user_id = w.user_id
-      LEFT JOIN dba_users u_b ON u_b.user_id = b.user_id
+      -- Container-aware lookups: DBA_USERS/DBA_OBJECTS in CDB$ROOT can't see
+      -- PDB users/objects, so join the CDB_* views on (con_id, id) instead.
+      LEFT JOIN cdb_users u_w ON u_w.con_id = w.con_id AND u_w.user_id = w.user_id
+      LEFT JOIN cdb_users u_b ON u_b.con_id = b.con_id AND u_b.user_id = b.user_id
+      -- The object the waiter was on (CURRENT_OBJ# is -1/0 when not applicable).
+      LEFT JOIN cdb_objects ow ON ow.con_id = w.con_id AND ow.object_id = w.current_obj#
      WHERE w.blocking_session IS NOT NULL
        AND w.blocking_session_status IN ('VALID', 'NOT IN WAIT', 'GLOBAL');
   END IF;
@@ -184,7 +191,25 @@ BEGIN
            'endTime'     VALUE TO_CHAR(l_end,   'YYYY-MM-DD"T"HH24:MI:SS'),
            'generatedAt' VALUE TO_CHAR(SYSTIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS'),
            'rowCount'    VALUE l_row_count,
-           'conIdFilter' VALUE l_con_id
+           'conIdFilter' VALUE l_con_id,
+           -- sql_id -> first 200 chars of the statement, for every SQL that ran
+           -- in the window (superset of waiter + blocker SQL ids), so the report
+           -- can show what the SQL was without a trip back to the DB.
+           'sqlText'     VALUE (
+             SELECT JSON_OBJECTAGG(x.sql_id VALUE x.txt RETURNING CLOB)
+               FROM (
+                 SELECT st.sql_id, MIN(DBMS_LOB.SUBSTR(st.sql_text, 200, 1)) AS txt
+                   FROM dba_hist_sqltext st
+                  WHERE (st.dbid, st.sql_id) IN (
+                          SELECT dbid, sql_id
+                            FROM dba_hist_active_sess_history
+                           WHERE sample_time BETWEEN l_begin AND l_end
+                             AND sql_id IS NOT NULL
+                             AND (l_con_id IS NULL OR con_id = l_con_id)
+                        )
+                  GROUP BY st.sql_id
+               ) x
+           )
            ABSENT ON NULL
            RETURNING CLOB
          )

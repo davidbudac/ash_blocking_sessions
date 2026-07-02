@@ -1,6 +1,10 @@
 # macOS
 .DS_Store
 
+# Generated report outputs (rsynced back by run_report.sh); only the curated
+# demo (reports/ash_blocking_demo.html) is source-controlled.
+reports/ash_blocking_2*.html
+
 # Local Claude Code overrides (per-machine permissions etc.)
 .claude/settings.local.json
 
