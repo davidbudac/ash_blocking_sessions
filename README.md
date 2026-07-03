@@ -5,9 +5,14 @@ self-contained, interactive HTML report — a per-session timeline of every
 session that was blocking or blocked in a time window, with a click-through
 blocking tree for any 10-second ASH sample.
 
-No application server, no agents, no database objects beyond two directory
-objects: SQL\*Plus runs one PL/SQL block that inlines the data as JSON into an
-HTML template and writes the finished report to disk. Open it in any browser.
+No application server, no agents, and **no database objects at all**:
+SQL\*Plus runs one read-only PL/SQL block that prints the data as JSON, and
+the shell script splices it into an HTML template on the client side. Open
+the result in any browser.
+
+Everything runs locally where the repo lives — a plain `sqlplus` call, no ssh
+and no rsync. The shell scripts are POSIX `sh`, so they run unchanged under the
+AIX `/bin/sh` (ksh), ksh93, or bash.
 
 ## What the report shows
 
@@ -29,18 +34,17 @@ HTML template and writes the finished report to disk. Open it in any browser.
 
 - Oracle 12.2+ with the **Diagnostics Pack** license (the report reads
   `DBA_HIST_*`).
-- SSH access to the database host and `sqlplus` there. The default connection
-  is OS-authenticated `/ as sysdba` into `CDB$ROOT`; a named account works too
-  (see below).
+- `sqlplus` on `PATH` (set your Oracle environment, e.g. `. oraenv`, first). The
+  default connection is OS-authenticated `/ as sysdba` into `CDB$ROOT`; a named
+  account or a remote EZConnect/TNS string works too (see below).
 - The time window must still be inside AWR retention (default 8 days):
   `select min(begin_interval_time) from dba_hist_snapshot;`
 
 ## Setup
 
-Edit the header of `run_report.sh` for your environment (`HOST`, `SSH_PORT`,
-`REMOTE_USER`, `ORACLE_SID` in `ENV_PREAMBLE`). If the project is synced to a
-path other than `/home/oracle/ash_blocking_sessions` on the DB host, update the
-hardcoded directory paths in `sql/01_dirs.sql`.
+None beyond a working `sqlplus`. The scripts run from wherever the repo is
+checked out; the report is assembled and written locally into `reports/`, so
+nothing in the database needs to know where the checkout lives.
 
 ## Usage
 
@@ -51,6 +55,15 @@ hardcoded directory paths in `sql/01_dirs.sql`.
 All arguments are positional; `AUTO` / `ALL` fall back to defaults. Times are
 ISO `YYYY-MM-DDTHH24:MI:SS` (uppercase `T`, no spaces), interpreted in the
 **database server's** timezone.
+
+`run_report.sh` is **fully read-only against the database**: the PL/SQL only
+`SELECT`s (`DBA_HIST_*` and catalog views, plus session-scoped NLS settings)
+and prints JSON; the HTML file is assembled and written by the shell script on
+the machine you run it from. No DDL, no DML, no directory objects, no
+server-side file access. That also means it works unchanged against a
+**remote** database — point the connect string at any host and the report
+still lands in the local `reports/`. All lock-generating demo tooling lives
+separately under `demo/`.
 
 ```bash
 # Last 2 hours, all containers, / as sysdba
@@ -66,8 +79,8 @@ ISO `YYYY-MM-DDTHH24:MI:SS` (uppercase `T`, no spaces), interpreted in the
 open "$(ls -1t reports/*.html | head -n1)"
 ```
 
-The script rsyncs the project to the DB host, runs the PL/SQL emitter there,
-and rsyncs the finished HTML back into `reports/`.
+The script runs the PL/SQL emitter with local `sqlplus` and writes the finished
+HTML into `reports/`.
 
 ### Investigating a past incident
 
@@ -88,27 +101,28 @@ captured in that window/container.
 
 ### Using a named account instead of SYSDBA
 
-The report itself only needs a **common user** connected to `CDB$ROOT` with:
-
-- `CREATE SESSION` and `SELECT_CATALOG_ROLE` (for `DBA_HIST_*`, `V$DATABASE`,
-  `CDB_USERS`, `CDB_OBJECTS`), and
-- access to the two directory objects: either `CREATE ANY DIRECTORY` (because
-  `sql/01_dirs.sql` re-creates them each run), or have a DBA create
-  `ASH_ASSETS` (READ) and `ASH_REPORTS` (READ, WRITE) once, grant them, and
-  remove the `01_dirs.sql` include from `build_report.sql`.
+The report itself only needs a **common user** connected to `CDB$ROOT` with
+`CREATE SESSION` and `SELECT_CATALOG_ROLE` (for `DBA_HIST_*`, `V$DATABASE`,
+`CDB_USERS`, `CDB_OBJECTS`). Nothing else — no directory objects, no quotas,
+no DDL privileges.
 
 ## Demo / test data (test databases only)
 
-`run_seed.sh` seeds four concurrent blocking patterns in a PDB — TX row-lock
+Everything test-related lives under `demo/` and is kept strictly separate from
+the production-safe report path. `demo/run_seed.sh` seeds four concurrent
+blocking patterns in a PDB — TX row-lock
 fan-in, a three-level TX chain, TM table-lock contention, and UL user-lock
 contention — waits for ASH to sample them, forces an AWR snapshot, and prints
 a ready-to-paste `run_report.sh` invocation. It creates and drops an
 `ASH_TEST` schema and kills its leftover sessions: **never run it against a
 real database.**
 
+It prompts for confirmation before touching the database (type `seed`);
+set `ASH_SEED_FORCE=1` to skip the prompt in scripted test runs.
+
 ```bash
-./run_seed.sh        # ~4 min of held locks
-./run_seed.sh 60     # quick smoke test
+./demo/run_seed.sh                    # ~4 min of held locks
+./demo/run_seed.sh "/ as sysdba" 60   # quick smoke test (60s wait)
 ```
 
 For UI work without any database, open `reports/ash_blocking_demo.html` — the
@@ -118,13 +132,16 @@ same report with a rich synthetic dataset inlined.
 
 | Path | Purpose |
 | --- | --- |
-| `run_report.sh` | Sync project to DB host, build report, pull it back |
-| `run_seed.sh` | Seed demo blocking patterns on a test DB |
+| `run_report.sh` | Build the report locally with SQL\*Plus (production-safe) |
 | `build_report.sql` | SQL\*Plus driver |
 | `sql/20_emit_html.sql` | The emitter: ASH query → JSON → template → HTML |
-| `sql/seed_blocking.sql` | Demo blocking patterns (A–D) |
+| `demo/run_seed.sh` | Seed demo blocking patterns — **test DBs only** |
+| `demo/seed_blocking.sql` | Demo blocking patterns (A–D) |
 | `assets/template.html` | Report template (single file, ECharts) |
 | `reports/ash_blocking_demo.html` | Offline demo with sample data inlined |
+| `docs/architecture.html` | Visual architecture overview (open in a browser) |
 
 Contributor documentation — architecture, template internals, and the testing
-workflow — lives in [CLAUDE.md](CLAUDE.md).
+workflow — lives in [CLAUDE.md](CLAUDE.md). For a visual overview of the
+pipeline (diagrams of the report flow, the stdout contract, and the seed flow),
+open [docs/architecture.html](docs/architecture.html) in a browser.

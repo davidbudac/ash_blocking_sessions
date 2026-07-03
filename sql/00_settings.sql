@@ -4,6 +4,10 @@
 SET FEEDBACK OFF
 SET HEADING OFF
 SET PAGESIZE 0
+-- TAB ON (the default) rewrites runs of output spaces into literal TAB
+-- characters at tab stops — that injects unescaped control characters into
+-- the JSON payload run_report.sh captures from stdout. Keep OFF.
+SET TAB OFF
 SET LINESIZE 32767
 SET LONG 2000000000
 SET LONGCHUNKSIZE 32767

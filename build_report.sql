@@ -1,24 +1,26 @@
 -- Driver for the ASH Blocking Sessions HTML report.
 --
 -- Usage (from sqlplus):
---   @build_report.sql <begin_time> <end_time> <con_id> <out_file>
+--   @build_report.sql <begin_time> <end_time> <con_id>
 --
--- Arguments — all four required (pass 'AUTO' / 'ALL' for defaults):
+-- Arguments — all three required (pass 'AUTO' / 'ALL' for defaults):
 --   <begin_time>  'YYYY-MM-DDTHH24:MI:SS' or 'AUTO' (= now - 2h)
 --   <end_time>    'YYYY-MM-DDTHH24:MI:SS' or 'AUTO' (= now)
 --   <con_id>      Numeric CON_ID, or 'ALL' to include every container
---   <out_file>    File name (placed under ASH_REPORTS dir), or 'AUTO'
 --
--- Connect as SYSDBA in CDB$ROOT; the script assumes ASH_ASSETS and ASH_REPORTS
--- directory objects point at <project>/assets and <project>/reports.
+-- Fully read-only: only SELECTs (DBA_HIST_*, CDB_USERS, CDB_OBJECTS,
+-- V$DATABASE) plus session-scoped NLS settings. No DDL, no DML, no directory
+-- objects, no server-side file access. The JSON payloads are printed to
+-- stdout between marker lines; run_report.sh splices them into
+-- assets/template.html and writes the HTML on the client side.
+--
+-- Connect as SYSDBA in CDB$ROOT, or any common user with SELECT_CATALOG_ROLE.
 
 @@sql/00_settings.sql
-@@sql/01_dirs.sql
 
 DEFINE begin_time = &1
 DEFINE end_time   = &2
 DEFINE con_id_arg = &3
-DEFINE out_file   = &4
 
 @@sql/20_emit_html.sql
 

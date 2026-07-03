@@ -6,17 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A PL/SQL + HTML pipeline that turns Oracle `DBA_HIST_ACTIVE_SESS_HISTORY` blocking samples into a single self-contained interactive HTML report. There is no application server: SQL*Plus runs a PL/SQL block that fills JSON into a template and writes the result to disk.
 
-The runtime target is a remote Oracle CDB on host `dbmint:2201` (user `oracle`, SID `cdb1`). Seed data lives in PDB1 (`CON_ID=3`). The local repo is `rsync`ed to `~/ash_blocking_sessions` on the host on every run.
+Everything runs locally where the repo lives — a plain `sqlplus` invocation, no ssh and no rsync. `sqlplus` connects to whatever the connect string points at (local OS auth by default, or a remote DB via EZConnect/TNS); since the HTML is assembled client-side from the query output, the machine running the scripts and the database can freely differ. Seed data lives in PDB1 (`CON_ID=3`). The shell scripts are POSIX `sh` (no bash-isms) so they run unchanged under the AIX `/bin/sh` (ksh), ksh93, or bash.
 
 ## Common commands
 
 ```bash
 # Seed realistic blocking scenarios in PDB1, wait, then force an AWR snapshot.
-# Default wait is 240s — use a smaller number for a quick smoke test (less ASH data).
-./run_seed.sh              # 240s wait
-./run_seed.sh 60           # 60s wait
+# DEMO/TEST ONLY — prompts for confirmation (type 'seed'); ASH_SEED_FORCE=1 skips it.
+# Args: [connect_string] [wait_secs]; default wait is 240s.
+./demo/run_seed.sh                        # / as sysdba, 240s wait
+./demo/run_seed.sh "/ as sysdba" 60       # 60s wait (quick smoke test, less ASH data)
 
-# Build the HTML report (rsyncs project up, runs sqlplus on the host, rsyncs reports back).
+# Build the HTML report (runs sqlplus locally; writes into reports/).
 # Args are positional: [connect_string] [begin] [end] [con_id] [out_file];
 # 'AUTO' / 'ALL' fall back to defaults. Arg 1 is the sqlplus connect string
 # ('AUTO' = '/ as sysdba'); quote it if it contains spaces.
@@ -29,25 +30,25 @@ The runtime target is a remote Oracle CDB on host `dbmint:2201` (user `oracle`, 
 open "$(ls -1t reports/*.html | head -n1)"
 ```
 
-Times are ISO `YYYY-MM-DDTHH24:MI:SS` (uppercase `T`, no spaces). `run_seed.sh` prints a ready-to-paste `run_report.sh` invocation with the seed window.
+Times are ISO `YYYY-MM-DDTHH24:MI:SS` (uppercase `T`, no spaces). `demo/run_seed.sh` prints a ready-to-paste `run_report.sh` invocation with the seed window.
+
+**Production stance:** `run_report.sh` is **fully read-only against the database** — the PL/SQL only `SELECT`s (`DBA_HIST_*`, `CDB_USERS`, `CDB_OBJECTS`, `V$DATABASE`) plus session-scoped NLS `ALTER SESSION`s. No DDL, no DML, no directory objects, no server-side file access: the JSON is printed to stdout and the HTML is assembled client-side by the shell. This also means it works against a **remote** DB via EZConnect/TNS — the report always lands in the local `reports/`. Everything under `demo/` is test-database-only and gated behind a confirmation prompt.
 
 There is **no build, no lint, no test runner**. UI iteration is done by editing `reports/ash_blocking_demo.html` (which has pre-baked sample data inlined as `window.ASH_DATA`) and opening it in a browser — no DB round-trip required. Once the UI is right, mirror the same edits into `assets/template.html`.
 
 ## How a report is produced
 
-1. **`run_report.sh`** rsyncs the repo (excluding `reports/` and `.git/`) to `oracle@dbmint:~/ash_blocking_sessions`, then SSHes in and runs `sqlplus -S -L <connect_string> @build_report.sql ...` (arg 1; default `/ as sysdba`). A named user must be a **common** user connected to `CDB$ROOT` with `SELECT_CATALOG_ROLE` plus access to the `ASH_ASSETS`/`ASH_REPORTS` directory objects — `sql/01_dirs.sql` runs `CREATE OR REPLACE DIRECTORY`, so it needs `CREATE ANY DIRECTORY` unless a DBA pre-creates the directories and that include is dropped.
-2. **`build_report.sql`** is the driver. It sources `sql/00_settings.sql` (non-interactive SQL*Plus settings, NLS formats, `WHENEVER SQLERROR EXIT FAILURE`), then `sql/01_dirs.sql` (creates Oracle directory objects `ASH_ASSETS` → `assets/` and `ASH_REPORTS` → `reports/` — paths are **hardcoded** to `/home/oracle/ash_blocking_sessions`), then `sql/20_emit_html.sql`.
+1. **`run_report.sh`** `cd`s to its own directory and runs `sqlplus -S -L <connect_string> @build_report.sql <begin> <end> <con_id>` (connect string is arg 1; default `/ as sysdba`), capturing **all stdout** into `reports/.build.$$/out.log`. A named user must be a **common** user connected to `CDB$ROOT` with `CREATE SESSION` and `SELECT_CATALOG_ROLE` — nothing else; there are no directory objects and no DDL anywhere in the report path.
+2. **`build_report.sql`** is the driver. It sources `sql/00_settings.sql` (non-interactive SQL*Plus settings, NLS formats, `WHENEVER SQLERROR EXIT FAILURE`, and **`SET TAB OFF`** — see gotchas), defines the three positional args (`begin_time`, `end_time`, `con_id_arg`), then sources `sql/20_emit_html.sql`.
 3. **`sql/20_emit_html.sql`** is the core PL/SQL block. It:
    - Counts blocking samples in the window. Refuses to render if `> 100000` (raises `-20001`).
    - Builds the data CLOB with `JSON_ARRAYAGG(JSON_OBJECT(... ABSENT ON NULL ... RETURNING CLOB))`. The query **left-joins `DBA_HIST_ACTIVE_SESS_HISTORY` to itself** on `(dbid, snap_id, sample_id, blocking_inst_id, blocking_session, blocking_session_serial#)` to enrich each row with what the blocker was doing in the same sample (fields prefixed `b*`: `bEv`, `bSqlId`, `bMod`, `bAct`, `bProg`, `bMach`, `bUser`, …). Usernames and the waiter's contended object (`obj`, from `CURRENT_OBJ#`) come from **`CDB_USERS`/`CDB_OBJECTS` joined on `(con_id, id)`** — the plain `DBA_*` views in `CDB$ROOT` can't see PDB users/objects, so don't "simplify" those joins back. The meta JSON additionally carries `sqlText`, a `sql_id → first-200-chars` map (from `DBA_HIST_SQLTEXT`) for every SQL that ran in the window, so the report can show statement text offline (`sqlSnip()` in the template; degrades gracefully when absent).
-   - Loads `assets/template.html` via `BFILE` + `DBMS_LOB.LOADCLOBFROMFILE` (UTF-8).
-   - Substitutes the placeholders `__META_JSON__` and `__DATA_JSON__` via the local `replace_tag` procedure, which splices `prefix ‖ value ‖ suffix` with `DBMS_LOB.COPY`/`APPEND`. **These two literal tokens are the contract between the SQL and the HTML.** It does **not** use SQL `REPLACE()` — that caps its replacement argument at 32K and raises `ORA-22828` once the data JSON exceeds it (which happens well under the 100k-sample guard, ~a few hundred samples).
-   - Writes the result with `DBMS_XSLPROCESSOR.CLOB2FILE` to `ASH_REPORTS`.
-4. **`run_report.sh`** rsyncs `reports/` back (excluding `ash_blocking_demo.html`, see gotchas) and prints the newest file.
+   - **Prints** both CLOBs to stdout via `DBMS_OUTPUT` between marker lines (`__META_JSON_BEGIN__/END__`, `__DATA_JSON_BEGIN__/END__`). Each chunk line is `#<≤500 chars>#` — the `#` sentinels protect leading/trailing whitespace from SQL\*Plus line trimming (a chunk ending in a space silently loses it otherwise; this corrupted event names in testing). 500 chars keeps every line under POSIX `LINE_MAX` even at 4-byte UTF-8, so AIX awk never sees an over-long record. Chunk boundaries can fall **mid-token**; the client joins them with NO newlines (safe because JSON generation escapes control characters, so the payload has no literal newlines). It touches **no server-side files**: no BFILE, no directory objects, no `CLOB2FILE`.
+4. **`run_report.sh`** post-processes the captured stdout with two awk passes: the first splits marker-delimited chunk lines (sentinels stripped, still one chunk per line) into `meta.json`/`data.json` and echoes everything else as progress output; the second streams `assets/template.html` and replaces each placeholder line with the concatenated chunks. **The placeholders `__META_JSON__` and `__DATA_JSON__` sit ALONE on their own lines in the template — that line-based layout is the contract with the shell splice** (checked before splicing; the build fails if a placeholder line is missing). The finished HTML lands in `reports/<out_file>` on the machine running the script — which is why the tool works unchanged against a remote DB.
 
-`sql/take_snap.sql` calls `DBMS_WORKLOAD_REPOSITORY.CREATE_SNAPSHOT` to force ASH → `DBA_HIST_ASH` flushing — without this, freshly seeded sessions won't be in the report query yet.
+`demo/take_snap.sql` calls `DBMS_WORKLOAD_REPOSITORY.CREATE_SNAPSHOT` to force ASH → `DBA_HIST_ASH` flushing — without this, freshly seeded sessions won't be in the report query yet.
 
-`sql/seed_blocking.sql` (run from `run_seed.sh`) clears any prior demo state, recreates `ASH_TEST` in PDB1, then submits `DBMS_SCHEDULER` jobs that produce four concurrent patterns spanning **multiple chains and more than one wait event at once**:
+`demo/seed_blocking.sql` (run from `demo/run_seed.sh`) clears any prior demo state, recreates `ASH_TEST` in PDB1, then submits `DBMS_SCHEDULER` jobs that produce four concurrent patterns spanning **multiple chains and more than one wait event at once**:
 - **Pattern A**: one blocker holding row 1 of `LOCK_TARGET` + three waiters fighting for it (`enq: TX - row lock contention`, fan-in).
 - **Pattern B**: A → B → C chain on rows 2/3 of `LOCK_TARGET` where B holds row 3 then waits on row 2 which A holds (`enq: TX - row lock contention`).
 - **Pattern C**: one session holds `LOCK TABLE … EXCLUSIVE` on the **separate** `LOCK_TARGET_TM` table + two waiters doing DML on it (`enq: TM - contention`).
@@ -69,10 +70,17 @@ Single HTML file, one IIFE, ECharts 5.5.0 from CDN. Pure-static — no fetches a
 
 ```html
 <script>
-  window.ASH_META = __META_JSON__;
-  window.ASH_DATA = __DATA_JSON__;
+  window.ASH_META =
+__META_JSON__
+  ;
+  window.ASH_DATA =
+__DATA_JSON__
+  ;
 </script>
 ```
+
+(The placeholders sit alone on their own lines so `run_report.sh` can splice
+them with a line-based awk; JS is fine with the newline before `;`.)
 
 The IIFE structure (top → bottom in `assets/template.html`):
 
@@ -87,9 +95,9 @@ The IIFE structure (top → bottom in `assets/template.html`):
 6. **`renderAll()`** wires the summary and panels to controls (`#colorBy`, `#topN`, `#idToggles`); full `renderLanes()` re-runs (which do reset zoom) happen only on control changes, not on selection.
 
 When changing the template:
-- Preserve the two placeholders `__META_JSON__` and `__DATA_JSON__` verbatim — the PL/SQL emitter REPLACEs them.
+- Preserve the two placeholders `__META_JSON__` and `__DATA_JSON__` verbatim, **each alone on its own line** — `run_report.sh` does a line-based splice (the emitter no longer substitutes anything server-side).
 - If you add a new field to the chart data, also add it to the `JSON_OBJECT(...)` in `sql/20_emit_html.sql`.
-- `assets/template.html` is the source of truth shipped to the DB host. `reports/ash_blocking_demo.html` is a snapshot with sample data inlined for offline UI work; remember to mirror non-data changes back to the template.
+- `assets/template.html` is the source of truth the emitter loads at build time. `reports/ash_blocking_demo.html` is a snapshot with sample data inlined for offline UI work; remember to mirror non-data changes back to the template.
 
 ## Testing the report
 
@@ -103,7 +111,7 @@ There is no checked-in test runner — testing is done with throwaway Node scrip
 
 The report is one IIFE in the last `<script>` block (no `src`), preceded by a small `<script>` that sets `window.ASH_META`/`window.ASH_DATA`. To test render logic without a browser, run both scripts under Node with a stubbed DOM + ECharts and assert on the captured `setOption` payloads. Recipe (write to `/tmp`, e.g. `/tmp/harness.js`):
 
-1. **Read the HTML**, then **inject test data** by regex-replacing the two assignments — this works for both the demo (`= {...};`) and the shipped template (`= __META_JSON__;`):
+1. **Read the HTML**, then **inject test data** by regex-replacing the two assignments — this works for the demo (`= {...};`), the shipped template (token alone on the next line), and generated reports (JSON on the next line):
    ```js
    html = html.replace(/window\.ASH_META\s*=\s*[\s\S]*?;\s*\n/, `window.ASH_META = ${JSON.stringify(meta)};\n`);
    html = html.replace(/window\.ASH_DATA\s*=\s*[\s\S]*?;\s*\n/, `window.ASH_DATA = ${JSON.stringify(data)};\n`);
@@ -128,24 +136,25 @@ To test multiple concurrent chains and multiple wait *classes* (colors), generat
 ### 4. Live end-to-end run (validates the SQL emitter + real ASH)
 
 ```bash
-./run_seed.sh                 # seed Patterns A–D, wait 240s, force an AWR snapshot
-                              # (./run_seed.sh 60 for a quick, lower-sample smoke test)
+./demo/run_seed.sh            # seed Patterns A–D, wait 240s, force an AWR snapshot
+                              # (./demo/run_seed.sh "/ as sysdba" 60 for a quick smoke test;
+                              #  it prompts for confirmation — ASH_SEED_FORCE=1 to skip)
 # copy the suggested window it prints, then:
 ./run_report.sh AUTO <begin> <end> 3   # AUTO = / as sysdba; CON_ID 3 = PDB1
 ```
 
 Then **verify the real data mix** before trusting the render — extract the embedded `window.ASH_DATA` from the generated `reports/ash_blocking_<ts>.html` and tally distinct `ev`/`wc` and how many samples carry >1 wait event at once. A healthy run shows `enq: TX - row lock contention`, `enq: TM - contention`, and `enq: UL - contention` overlapping across multiple samples. If everything collapsed to a single event, a lock leaked across runs (see gotchas) — re-seed. Finally, run the level-2 harness against the generated report to confirm it renders without throwing.
 
-**Seeding/reporting hit the remote DB** (`dbmint`) — it creates the `ASH_TEST` schema, holds locks for ~4 minutes, and forces an AWR snapshot. Confirm before running if that matters in your context. The jobs `auto_drop` and roll back, so no manual cleanup is needed.
+**Seeding hits whatever DB the connect string targets** — it creates the `ASH_TEST` schema, holds locks for ~4 minutes, and forces an AWR snapshot. Confirm before running if that matters in your context. The jobs `auto_drop` and roll back, so no manual cleanup is needed.
 
 ## Operational gotchas
 
-- `sql/01_dirs.sql` paths are hardcoded to `/home/oracle/ash_blocking_sessions/{assets,reports}`. If the project is synced elsewhere on the DB host, update this file.
-- `build_report.sql` must connect as SYSDBA in `CDB$ROOT` because `DBA_HIST_ACTIVE_SESS_HISTORY` lives there. The `CON_ID` argument filters at query time.
-- `run_report.sh` rsync `--delete`s the remote project tree (excluding `reports/` and `.git/`). Don't leave anything on the host that isn't in the repo.
+- `build_report.sql` must connect as SYSDBA in `CDB$ROOT` (or a common user with `SELECT_CATALOG_ROLE`) because `DBA_HIST_ACTIVE_SESS_HISTORY` lives there. The `CON_ID` argument filters at query time.
+- The scripts are POSIX `sh` for AIX: no `set -o pipefail`, no `[[ ... ]]`/`=~` (uses `case`), no arrays. Keep them bash-free so they run under the AIX `/bin/sh` (ksh88). They rely on `sqlplus` being on `PATH` — set the Oracle env (`. oraenv`) first.
 - The 100k-sample guard in `20_emit_html.sql` is a safety against running a multi-day window. Narrow the window or filter by `CON_ID` rather than raising the limit.
 - Seed jobs (`ASH_TEST.ASH_DEMO_*`) are created with `auto_drop => TRUE`; they vanish after their `DBMS_LOCK.SLEEP` completes. No cleanup step needed.
-- **Placeholder substitution must not use SQL `REPLACE()`** — its replacement arg is capped at 32K (`ORA-22828`), which the data JSON exceeds at a few hundred samples. The emitter uses the `DBMS_LOB`-based `replace_tag` procedure instead. Don't "simplify" it back to `REPLACE`.
-- **`run_report.sh` excludes `ash_blocking_demo.html` from the rsync-back.** The curated demo lives in `reports/` (which the up-sync excludes), so a stale copy lingering on the host would otherwise overwrite your local source-of-truth demo on every report build. If you ever rename the demo, update that exclude.
+- **`SET TAB OFF` in `sql/00_settings.sql` is load-bearing.** SQL\*Plus's default `TAB ON` rewrites runs of output spaces into literal TAB characters at tab stops — an unescaped control character inside the JSON payload, which breaks `JSON.parse` in the report (bit us live: a `sqlText` snippet with two consecutive spaces). Similarly, the `#` sentinels around chunk lines exist because SQL\*Plus strips trailing whitespace from output lines. Don't remove either.
+- **The stdout protocol is the contract** between `sql/20_emit_html.sql` and `run_report.sh`: marker lines, `#`-wrapped ≤500-char chunks, no-newline joining. If you change one side, change the other; the chunk size must stay ≤500 chars so AIX line-based tools never see a record over `LINE_MAX`.
+- The curated `reports/ash_blocking_demo.html` is source-controlled and shares the `reports/` dir with generated reports. There is no rsync anymore, so nothing overwrites it; `run_report.sh` just prints the newest `reports/*.html`, which is the fresh build (generated reports always get a newer mtime than the committed demo).
 - **Don't lock the shared `LOCK_TARGET` table in EXCLUSIVE mode** in any seed pattern — it starves the TX row-lock patterns and collapses all chains into one `enq: TM` wait. The TM pattern uses a dedicated `LOCK_TARGET_TM`.
 - A prior seed run's still-sleeping sessions can cause `ORA-01940` on `DROP USER`; the seed now kills `ASH_TEST` sessions and stops `ASH_DEMO_*` jobs first. If you see a dirty schema, that teardown is where to look.

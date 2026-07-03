@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASH Blocking Sessions — Architecture</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2430; --muted: #5f6672; --line: #d8dce3;
+    --card: #f6f7f9; --accent: #1d5fa5; --db: #e6f1fb; --db-line: #1d5fa5;
+    --sh: #f1efe8; --sh-line: #5f5e5a; --out: #eaf3de; --out-line: #3b6d11;
+    --warn: #fff6e5; --warn-line: #ba7517; --code: #eceef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161b; --fg: #e6e8ec; --muted: #9aa1ab; --line: #3a3f47;
+      --card: #1c1f26; --accent: #7fb3e8; --db: #12283d; --db-line: #7fb3e8;
+      --sh: #24231e; --sh-line: #b4b2a9; --out: #1c2a12; --out-line: #97c459;
+      --warn: #2e2412; --warn-line: #efb75a; --code: #23262d;
+    }
+  }
+  body { margin: 0 auto; max-width: 960px; padding: 2rem 1.25rem 4rem;
+         background: var(--bg); color: var(--fg);
+         font: 16px/1.55 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  h1 { font-size: 1.7rem; margin: 0 0 .3rem; }
+  h2 { font-size: 1.2rem; margin: 2.2rem 0 .6rem; border-bottom: 1px solid var(--line); padding-bottom: .3rem; }
+  p.lead { color: var(--muted); margin-top: 0; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .86em; }
+  code { background: var(--code); padding: .08em .35em; border-radius: 4px; }
+  pre { background: var(--code); padding: .8rem 1rem; border-radius: 8px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .85rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.2rem; margin: 1rem 0; }
+  .warn { background: var(--warn); border-color: var(--warn-line); }
+  .legend { display: flex; gap: 1.4rem; flex-wrap: wrap; color: var(--muted); font-size: .85rem; margin: .4rem 0 0; }
+  .legend span { display: inline-flex; align-items: center; gap: .4rem; }
+  .sw { width: 14px; height: 14px; border-radius: 3px; display: inline-block; border: 1.5px solid; }
+  figure { margin: 1rem 0; }
+  svg { width: 100%; height: auto; }
+  svg text { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: var(--fg); }
+  svg .sub { fill: var(--muted); font-size: 11.5px; }
+  svg .t { font-size: 13.5px; font-weight: 600; }
+  svg .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11.5px; }
+  svg .edge { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+  svg .elabel { fill: var(--muted); font-size: 11.5px; }
+  li { margin: .3rem 0; }
+</style>
+</head>
+<body>
+
+<h1>ASH Blocking Sessions — Architecture</h1>
+<p class="lead">
+How one shell script and one read-only PL/SQL block turn
+<code>DBA_HIST_ACTIVE_SESS_HISTORY</code> blocking samples into a single
+self-contained interactive HTML report. No application server, no database
+objects, no server-side files.
+</p>
+
+<h2>The report pipeline</h2>
+<p>
+Everything runs on the machine where the repo lives. <code>sqlplus</code> can
+connect to a local instance (<code>/ as sysdba</code>) or a remote one
+(EZConnect/TNS) — the database only ever <em>answers queries</em>; the HTML is
+assembled client-side, so the report always lands in the local
+<code>reports/</code>.
+</p>
+
+<figure aria-label="Pipeline diagram">
+<svg viewBox="0 0 920 560" role="img">
+  <title>Report pipeline</title>
+  <desc>run_report.sh runs sqlplus, which prints JSON between markers; awk splits and splices it into the template, producing the report HTML.</desc>
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/>
+    </marker>
+  </defs>
+
+  <!-- lane divider -->
+  <line x1="590" y1="16" x2="590" y2="544" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <text class="t" x="20" y="30">This machine (shell side)</text>
+  <text class="t" x="610" y="30">Database session (read-only)</text>
+
+  <!-- run_report.sh -->
+  <rect x="20" y="52" width="290" height="64" rx="9" fill="var(--sh)" stroke="var(--sh-line)" stroke-width="1.5"/>
+  <text class="t" x="165" y="78" text-anchor="middle">run_report.sh</text>
+  <text class="sub" x="165" y="96" text-anchor="middle">POSIX sh — AIX ksh88-safe</text>
+
+  <!-- sqlplus invocation -->
+  <rect x="20" y="160" width="290" height="64" rx="9" fill="var(--sh)" stroke="var(--sh-line)" stroke-width="1.5"/>
+  <text class="mono" x="165" y="186" text-anchor="middle">sqlplus -S -L $CONN @build_report.sql</text>
+  <text class="sub" x="165" y="204" text-anchor="middle">stdout captured to reports/.build.$$/out.log</text>
+
+  <!-- db side: driver -->
+  <rect x="610" y="52" width="290" height="64" rx="9" fill="var(--db)" stroke="var(--db-line)" stroke-width="1.5"/>
+  <text class="t" x="755" y="78" text-anchor="middle">build_report.sql</text>
+  <text class="sub" x="755" y="96" text-anchor="middle">defines begin / end / con_id args</text>
+
+  <rect x="610" y="150" width="290" height="64" rx="9" fill="var(--db)" stroke="var(--db-line)" stroke-width="1.5"/>
+  <text class="t" x="755" y="176" text-anchor="middle">sql/00_settings.sql</text>
+  <text class="sub" x="755" y="194" text-anchor="middle">non-interactive settings, SET TAB OFF</text>
+
+  <rect x="610" y="248" width="290" height="96" rx="9" fill="var(--db)" stroke="var(--db-line)" stroke-width="1.5"/>
+  <text class="t" x="755" y="274" text-anchor="middle">sql/20_emit_html.sql</text>
+  <text class="sub" x="755" y="292" text-anchor="middle">count guard (&gt;100k refuses) · ASH self-join</text>
+  <text class="sub" x="755" y="308" text-anchor="middle">JSON_ARRAYAGG data + meta (sqlText map)</text>
+  <text class="sub" x="755" y="324" text-anchor="middle">prints CLOBs via DBMS_OUTPUT — SELECT only</text>
+
+  <!-- stdout protocol -->
+  <rect x="320" y="278" width="230" height="112" rx="9" fill="var(--warn)" stroke="var(--warn-line)" stroke-width="1.5"/>
+  <text class="t" x="435" y="302" text-anchor="middle">stdout protocol</text>
+  <text class="mono" x="435" y="322" text-anchor="middle">__META_JSON_BEGIN__ … END__</text>
+  <text class="mono" x="435" y="338" text-anchor="middle">__DATA_JSON_BEGIN__ … END__</text>
+  <text class="sub" x="435" y="356" text-anchor="middle">chunk lines: #&lt;≤500 chars&gt;#</text>
+  <text class="sub" x="435" y="372" text-anchor="middle">joined with NO newlines</text>
+
+  <!-- awk pass 1 -->
+  <rect x="20" y="300" width="230" height="78" rx="9" fill="var(--sh)" stroke="var(--sh-line)" stroke-width="1.5"/>
+  <text class="t" x="135" y="324" text-anchor="middle">awk pass 1 — split</text>
+  <text class="sub" x="135" y="342" text-anchor="middle">strip # sentinels → meta.json / data.json</text>
+  <text class="sub" x="135" y="358" text-anchor="middle">everything else → progress output</text>
+
+  <!-- awk pass 2 -->
+  <rect x="20" y="412" width="230" height="78" rx="9" fill="var(--sh)" stroke="var(--sh-line)" stroke-width="1.5"/>
+  <text class="t" x="135" y="436" text-anchor="middle">awk pass 2 — splice</text>
+  <text class="sub" x="135" y="454" text-anchor="middle">replace placeholder lines in</text>
+  <text class="sub" x="135" y="470" text-anchor="middle">assets/template.html with the JSON</text>
+
+  <!-- output -->
+  <rect x="300" y="440" width="250" height="64" rx="9" fill="var(--out)" stroke="var(--out-line)" stroke-width="1.5"/>
+  <text class="t" x="425" y="466" text-anchor="middle">reports/ash_blocking_*.html</text>
+  <text class="sub" x="425" y="484" text-anchor="middle">self-contained — open in any browser</text>
+
+  <!-- edges -->
+  <line class="edge" x1="165" y1="116" x2="165" y2="156" marker-end="url(#arr)"/>
+  <path class="edge" d="M310 184 C 420 184, 480 84, 606 84" marker-end="url(#arr)"/>
+  <text class="elabel" x="430" y="120" text-anchor="middle">connect + run</text>
+  <line class="edge" x1="755" y1="116" x2="755" y2="146" marker-end="url(#arr)"/>
+  <line class="edge" x1="755" y1="214" x2="755" y2="244" marker-end="url(#arr)"/>
+  <line class="edge" x1="606" y1="316" x2="554" y2="330" marker-end="url(#arr)"/>
+  <text class="elabel" x="580" y="306" text-anchor="middle">prints</text>
+  <line class="edge" x1="316" y1="336" x2="254" y2="336" marker-end="url(#arr)"/>
+  <line class="edge" x1="135" y1="378" x2="135" y2="408" marker-end="url(#arr)"/>
+  <path class="edge" d="M250 460 C 270 464, 280 466, 296 470" marker-end="url(#arr)"/>
+</svg>
+<div class="legend">
+  <span><span class="sw" style="background:var(--sh);border-color:var(--sh-line)"></span> shell (this machine)</span>
+  <span><span class="sw" style="background:var(--db);border-color:var(--db-line)"></span> database session</span>
+  <span><span class="sw" style="background:var(--warn);border-color:var(--warn-line)"></span> stdout contract</span>
+  <span><span class="sw" style="background:var(--out);border-color:var(--out-line)"></span> deliverable</span>
+</div>
+</figure>
+
+<div class="card">
+<strong>Read-only guarantee.</strong> The database session only runs
+<code>SELECT</code>s (<code>DBA_HIST_*</code>, <code>CDB_USERS</code>,
+<code>CDB_OBJECTS</code>, <code>V$DATABASE</code>) plus session-scoped NLS
+<code>ALTER SESSION</code>s. No DDL, no DML, no directory objects, no
+server-side file access. A named account needs only <code>CREATE SESSION</code>
+and <code>SELECT_CATALOG_ROLE</code> on a common user in <code>CDB$ROOT</code>.
+</div>
+
+<h2>The stdout contract</h2>
+<p>
+The interface between <code>sql/20_emit_html.sql</code> and
+<code>run_report.sh</code> is plain text on stdout. Three rules make it robust
+across SQL*Plus quirks and AIX line-length limits — if you change one side,
+change the other:
+</p>
+<ul>
+  <li><strong><code>#</code> sentinels per chunk line</strong> — SQL*Plus strips
+      trailing whitespace from output lines; a chunk ending in a space would
+      silently lose it (this corrupted wait-event names in testing).</li>
+  <li><strong>≤500 characters per chunk</strong> — stays under POSIX
+      <code>LINE_MAX</code> (2048 bytes) even at 4-byte UTF-8, so AIX awk never
+      sees an over-long record.</li>
+  <li><strong>Chunks join with no newline</strong> — boundaries can fall
+      mid-token; safe because Oracle's JSON generators escape control
+      characters, so the payload never contains a literal newline. Relatedly,
+      <code>SET TAB OFF</code> in <code>sql/00_settings.sql</code> is
+      load-bearing: the default <code>TAB ON</code> rewrites runs of spaces
+      into literal TABs — unescaped control characters that break
+      <code>JSON.parse</code>.</li>
+</ul>
+<pre><code>Window : 2026-07-02T11:00:00 .. 2026-07-02T12:00:00      &lt;- progress (echoed to user)
+Blocking samples found: 206
+__META_JSON_BEGIN__
+#{"dbName":"CDB1","dbId":1183716798,"beginTime":"2026-07#   &lt;- ≤500-char chunks,
+#-02T11:00:00", ...                                     #      # sentinels
+__META_JSON_END__
+__DATA_JSON_BEGIN__
+#[{"t":"2026-07-02T11:00:05","sid":34, ...              #
+__DATA_JSON_END__</code></pre>
+
+<p>
+On the template side, the two placeholders sit <em>alone on their own lines</em>
+— that line-based layout is the splice contract (verified before splicing):
+</p>
+<pre><code>&lt;script&gt;
+  window.ASH_META =
+__META_JSON__          &lt;- each line replaced by the concatenated chunks
+  ;
+  window.ASH_DATA =
+__DATA_JSON__
+  ;
+&lt;/script&gt;</code></pre>
+
+<h2>Demo / seed flow (test databases only)</h2>
+<p>
+Everything under <code>demo/</code> is deliberately invasive — it manufactures
+blocking so the report has something to show — and is gated behind a
+confirmation prompt (type <code>seed</code>; <code>ASH_SEED_FORCE=1</code>
+skips it for scripted runs).
+</p>
+<figure aria-label="Seed flow diagram">
+<svg viewBox="0 0 920 210" role="img">
+  <title>Seed flow</title>
+  <desc>run_seed.sh confirms, seeds blocking patterns, waits, then forces an AWR snapshot.</desc>
+  <defs>
+    <marker id="arr2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="var(--muted)"/>
+    </marker>
+  </defs>
+  <rect x="16" y="40" width="196" height="80" rx="9" fill="var(--sh)" stroke="var(--sh-line)" stroke-width="1.5"/>
+  <text class="t" x="114" y="68" text-anchor="middle">demo/run_seed.sh</text>
+  <text class="sub" x="114" y="86" text-anchor="middle">confirmation gate,</text>
+  <text class="sub" x="114" y="102" text-anchor="middle">then sqlplus × 2</text>
+
+  <rect x="252" y="40" width="212" height="80" rx="9" fill="var(--db)" stroke="var(--db-line)" stroke-width="1.5"/>
+  <text class="t" x="358" y="62" text-anchor="middle">seed_blocking.sql</text>
+  <text class="sub" x="358" y="80" text-anchor="middle">recreate ASH_TEST in PDB1,</text>
+  <text class="sub" x="358" y="96" text-anchor="middle">submit DBMS_SCHEDULER jobs</text>
+  <text class="sub" x="358" y="112" text-anchor="middle">patterns A–D: TX fan-in/chain, TM, UL</text>
+
+  <rect x="504" y="40" width="170" height="80" rx="9" fill="var(--sh)" stroke="var(--sh-line)" stroke-width="1.5"/>
+  <text class="t" x="589" y="72" text-anchor="middle">sleep N secs</text>
+  <text class="sub" x="589" y="90" text-anchor="middle">ASH samples the locks</text>
+
+  <rect x="714" y="40" width="190" height="80" rx="9" fill="var(--db)" stroke="var(--db-line)" stroke-width="1.5"/>
+  <text class="t" x="809" y="66" text-anchor="middle">take_snap.sql</text>
+  <text class="sub" x="809" y="84" text-anchor="middle">CREATE_SNAPSHOT flushes</text>
+  <text class="sub" x="809" y="100" text-anchor="middle">ASH → DBA_HIST_ASH</text>
+
+  <line class="edge" x1="212" y1="80" x2="248" y2="80" marker-end="url(#arr2)"/>
+  <line class="edge" x1="464" y1="80" x2="500" y2="80" marker-end="url(#arr2)"/>
+  <line class="edge" x1="674" y1="80" x2="710" y2="80" marker-end="url(#arr2)"/>
+  <text class="sub" x="460" y="160" text-anchor="middle">…then it prints a ready-to-paste run_report.sh invocation covering the seed window.</text>
+</svg>
+</figure>
+
+<h2>The report itself</h2>
+<p>
+<code>assets/template.html</code> is a single file: one IIFE, ECharts from CDN,
+data injected at build time (no fetches at runtime). It renders key-findings
+KPIs and auto-generated verdict sentences, a per-session Gantt timeline grouped
+by wait chain (filled cell = waiting, outlined = holding a lock), and a
+click-to-drill blocking tree at any 10-second ASH sample.
+<code>reports/ash_blocking_demo.html</code> is the same code with a rich
+synthetic dataset inlined, for offline UI work.
+</p>
+
+<h2>Repository layout</h2>
+<table>
+  <tr><th>Path</th><th>Role</th></tr>
+  <tr><td><code>run_report.sh</code></td><td>Entry point. Runs sqlplus, splits/splices the JSON, writes <code>reports/&lt;file&gt;.html</code>. Production-safe.</td></tr>
+  <tr><td><code>build_report.sql</code></td><td>SQL*Plus driver: settings + args + emitter.</td></tr>
+  <tr><td><code>sql/00_settings.sql</code></td><td>Non-interactive session settings. <code>SET TAB OFF</code> lives here.</td></tr>
+  <tr><td><code>sql/20_emit_html.sql</code></td><td>The emitter: ASH query → JSON → chunked stdout. Read-only.</td></tr>
+  <tr><td><code>assets/template.html</code></td><td>Report UI (source of truth). Placeholder lines are the splice contract.</td></tr>
+  <tr><td><code>reports/</code></td><td>Generated reports (git-ignored) + the curated offline demo.</td></tr>
+  <tr><td><code>demo/</code></td><td>Seed tooling — test databases only, confirmation-gated.</td></tr>
+  <tr><td><code>docs/architecture.html</code></td><td>This page.</td></tr>
+</table>
+
+<div class="card warn">
+<strong>Invariants worth protecting</strong> (details in <code>CLAUDE.md</code>):
+the stdout protocol is a two-sided contract; <code>SET TAB OFF</code> and the
+<code>#</code> sentinels are load-bearing; placeholders stay alone on their own
+lines; shell scripts stay POSIX (AIX ksh88 — no bashisms); the 100k-sample
+guard protects against multi-day windows; and the TM seed pattern keeps its own
+table so it doesn't collapse the TX chains.
+</div>
+
+</body>
+</html>

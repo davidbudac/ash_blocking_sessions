@@ -1,16 +1,33 @@
--- Build the HTML report from DBA_HIST_ACTIVE_SESS_HISTORY.
+-- Query DBA_HIST_ACTIVE_SESS_HISTORY and PRINT the report JSON to stdout.
+--
+-- Fully read-only against the database: no DDL, no DML, no directory objects,
+-- no server-side file access. The two JSON documents are emitted through
+-- DBMS_OUTPUT between marker lines; run_report.sh captures stdout, extracts
+-- them, and splices them into assets/template.html on the CLIENT side.
+--
+-- Output protocol (consumed by run_report.sh):
+--   __META_JSON_BEGIN__ ... __META_JSON_END__   the meta JSON, in chunk lines
+--   __DATA_JSON_BEGIN__ ... __DATA_JSON_END__   the data JSON, in chunk lines
+-- Each chunk line is wrapped in '#' sentinels: #<up to 500 chars>#. SQL*Plus
+-- strips trailing whitespace from output lines, so a chunk ending in a space
+-- would silently lose it without the closing sentinel (this corrupted string
+-- values in testing). The client strips the sentinels and concatenates chunks
+-- WITHOUT newlines (a boundary can fall mid-token). The JSON generation
+-- functions escape control characters, so the payload itself never contains a
+-- literal newline — concatenation is safe. Anything outside the markers is
+-- human-readable progress info.
 --
 -- Expects DEFINEs set by the driver:
 --   begin_time  ISO 'YYYY-MM-DDTHH24:MI:SS' or 'AUTO' (= SYSTIMESTAMP - 2h)
 --   end_time    ISO 'YYYY-MM-DDTHH24:MI:SS' or 'AUTO' (= SYSTIMESTAMP)
 --   con_id_arg  '' / 'NULL' / 'ALL' for no filter, otherwise a CON_ID number
---   out_file    file name (placed in ASH_REPORTS); 'AUTO' = ash_blocking_<ts>.html
---
--- Reads assets/template.html via ASH_ASSETS, writes the rendered HTML via
--- ASH_REPORTS. Both directories must exist (created in 01_dirs.sql).
 
 DECLARE
   c_fmt         CONSTANT VARCHAR2(40) := 'YYYY-MM-DD"T"HH24:MI:SS';
+  -- 500 chars/line: stays under DBMS_OUTPUT's 32767-byte line cap and POSIX
+  -- LINE_MAX (2048 bytes) even if every character were 4-byte UTF-8, so the
+  -- client-side awk never sees an over-long record (matters on AIX).
+  c_chunk       CONSTANT PLS_INTEGER := 500;
 
   l_begin_arg   VARCHAR2(40) := TRIM('&begin_time');
   l_end_arg     VARCHAR2(40) := TRIM('&end_time');
@@ -18,48 +35,25 @@ DECLARE
   l_end         TIMESTAMP;
   l_con_id_arg  VARCHAR2(32) := TRIM('&con_id_arg');
   l_con_id      NUMBER;
-  l_out_file    VARCHAR2(200) := TRIM('&out_file');
 
   l_row_count   NUMBER;
   l_data        CLOB;
   l_meta        CLOB;
-  l_tmpl        CLOB;
-  l_out         CLOB;
 
-  bf            BFILE;
-  l_dst_offset  INTEGER := 1;
-  l_src_offset  INTEGER := 1;
-  l_lang_ctx    INTEGER := DBMS_LOB.DEFAULT_LANG_CTX;
-  l_warning     INTEGER;
-
-  -- Substitute a placeholder token with a (possibly large) CLOB value.
-  -- SQL's REPLACE() caps the replacement arg at 32K (ORA-22828), so for data
-  -- JSON beyond 32K we splice via DBMS_LOB: prefix || value || suffix.
-  PROCEDURE replace_tag(io_lob IN OUT NOCOPY CLOB, p_tag IN VARCHAR2, p_val IN CLOB) IS
-    l_pos   PLS_INTEGER;
-    l_len   PLS_INTEGER;
-    l_tail  PLS_INTEGER;
-    l_tagln PLS_INTEGER := LENGTH(p_tag);
-    l_res   CLOB;
+  -- Print a CLOB as sentinel-wrapped chunk lines between BEGIN/END markers.
+  -- The '#' sentinels protect leading/trailing whitespace in each chunk from
+  -- SQL*Plus line trimming; the client strips them before joining.
+  PROCEDURE print_clob(p_tag IN VARCHAR2, p_val IN CLOB) IS
+    l_len PLS_INTEGER := NVL(DBMS_LOB.GETLENGTH(p_val), 0);
+    l_pos PLS_INTEGER := 1;
   BEGIN
-    l_pos := DBMS_LOB.INSTR(io_lob, p_tag);
-    IF l_pos = 0 THEN RETURN; END IF;
-    l_len := DBMS_LOB.GETLENGTH(io_lob);
-    DBMS_LOB.CREATETEMPORARY(l_res, TRUE);
-    IF l_pos > 1 THEN
-      DBMS_LOB.COPY(l_res, io_lob, l_pos - 1, 1, 1);              -- prefix
-    END IF;
-    IF p_val IS NOT NULL AND DBMS_LOB.GETLENGTH(p_val) > 0 THEN
-      DBMS_LOB.APPEND(l_res, p_val);                             -- value
-    END IF;
-    l_tail := l_len - (l_pos + l_tagln - 1);
-    IF l_tail > 0 THEN
-      DBMS_LOB.COPY(l_res, io_lob, l_tail,
-                    DBMS_LOB.GETLENGTH(l_res) + 1, l_pos + l_tagln);  -- suffix
-    END IF;
-    DBMS_LOB.FREETEMPORARY(io_lob);
-    io_lob := l_res;
-  END replace_tag;
+    DBMS_OUTPUT.PUT_LINE('__' || p_tag || '_BEGIN__');
+    WHILE l_pos <= l_len LOOP
+      DBMS_OUTPUT.PUT_LINE('#' || DBMS_LOB.SUBSTR(p_val, c_chunk, l_pos) || '#');
+      l_pos := l_pos + c_chunk;
+    END LOOP;
+    DBMS_OUTPUT.PUT_LINE('__' || p_tag || '_END__');
+  END print_clob;
 BEGIN
   IF l_begin_arg IS NULL OR UPPER(l_begin_arg) IN ('AUTO','') THEN
     l_begin := SYSTIMESTAMP - INTERVAL '2' HOUR;
@@ -79,13 +73,8 @@ BEGIN
     l_con_id := TO_NUMBER(l_con_id_arg);
   END IF;
 
-  IF l_out_file IS NULL OR UPPER(l_out_file) IN ('AUTO','') THEN
-    l_out_file := 'ash_blocking_' || TO_CHAR(SYSDATE, 'YYYYMMDD_HH24MISS') || '.html';
-  END IF;
-
   DBMS_OUTPUT.PUT_LINE('Window : ' || TO_CHAR(l_begin, c_fmt) || ' .. ' || TO_CHAR(l_end, c_fmt));
   DBMS_OUTPUT.PUT_LINE('CON_ID : ' || NVL(TO_CHAR(l_con_id), '(all)'));
-  DBMS_OUTPUT.PUT_LINE('Output : ' || l_out_file);
 
   -- 1. Count first so we can warn / refuse on huge windows.
   SELECT COUNT(*)
@@ -216,37 +205,12 @@ BEGIN
     INTO l_meta
     FROM dual;
 
-  -- 4. Read the HTML template.
-  DBMS_LOB.CREATETEMPORARY(l_tmpl, TRUE);
-  bf := BFILENAME('ASH_ASSETS', 'template.html');
-  DBMS_LOB.FILEOPEN(bf, DBMS_LOB.FILE_READONLY);
-  DBMS_LOB.LOADCLOBFROMFILE(
-    dest_lob     => l_tmpl,
-    src_bfile    => bf,
-    amount       => DBMS_LOB.LOBMAXSIZE,
-    dest_offset  => l_dst_offset,
-    src_offset   => l_src_offset,
-    bfile_csid   => NLS_CHARSET_ID('AL32UTF8'),
-    lang_context => l_lang_ctx,
-    warning      => l_warning
-  );
-  DBMS_LOB.FILECLOSE(bf);
+  -- 4. Emit both documents; run_report.sh does the template splice client-side.
+  print_clob('META_JSON', l_meta);
+  print_clob('DATA_JSON', l_data);
 
-  -- 5. Substitute placeholders via DBMS_LOB (no 32K limit; see replace_tag).
-  replace_tag(l_tmpl, '__META_JSON__', l_meta);
-  replace_tag(l_tmpl, '__DATA_JSON__', l_data);
-  l_out := l_tmpl;
-
-  -- 6. Write to disk via the REPORTS directory.
-  DBMS_XSLPROCESSOR.CLOB2FILE(l_out, 'ASH_REPORTS', l_out_file, NLS_CHARSET_ID('AL32UTF8'));
-
-  DBMS_OUTPUT.PUT_LINE('Wrote ' || l_out_file || ' (' || l_row_count || ' samples, ' ||
-                       ROUND(DBMS_LOB.GETLENGTH(l_out)/1024) || ' KB)');
-
-  IF DBMS_LOB.ISTEMPORARY(l_tmpl) = 1 THEN DBMS_LOB.FREETEMPORARY(l_tmpl); END IF;
-EXCEPTION
-  WHEN OTHERS THEN
-    IF DBMS_LOB.ISTEMPORARY(l_tmpl) = 1 THEN DBMS_LOB.FREETEMPORARY(l_tmpl); END IF;
-    RAISE;
+  DBMS_OUTPUT.PUT_LINE('Emitted ' || l_row_count || ' samples, ' ||
+                       ROUND((NVL(DBMS_LOB.GETLENGTH(l_data),0) +
+                              NVL(DBMS_LOB.GETLENGTH(l_meta),0))/1024) || ' KB of JSON');
 END;
 /
