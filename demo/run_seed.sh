@@ -81,5 +81,5 @@ sqlplus -S -L $CONN @take_snap.sql
 SEED_END_LOCAL=$(date -u '+%Y-%m-%dT%H:%M:%S')
 echo
 echo "==> Done. Suggested report window (UTC, give or take a few seconds):"
-echo "    $ROOT_DIR/run_report.sh AUTO $SEED_START_LOCAL $SEED_END_LOCAL 3"
-echo "    (AUTO = connect '/ as sysdba'; CON_ID 3 = PDB1, where the seed jobs ran)"
+echo "    $ROOT_DIR/run_report.sh AUTO $SEED_START_LOCAL $SEED_END_LOCAL"
+echo "    (AUTO = connect '/ as sysdba'; the report covers all containers, incl. PDB1 where the seed jobs ran)"

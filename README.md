@@ -49,12 +49,15 @@ nothing in the database needs to know where the checkout lives.
 ## Usage
 
 ```bash
-./run_report.sh [connect_string] [begin_time] [end_time] [con_id] [out_file]
+./run_report.sh [connect_string] [begin_time] [end_time] [out_file]
 ```
 
-All arguments are positional; `AUTO` / `ALL` fall back to defaults. Times are
+All arguments are positional; `AUTO` falls back to defaults. Times are
 ISO `YYYY-MM-DDTHH24:MI:SS` (uppercase `T`, no spaces), interpreted in the
-**database server's** timezone.
+**database server's** timezone. The report always covers **every container** in
+the connected CDB — AWR/ASH lives in `CDB$ROOT`, so the report reads all
+containers at once and each row is tagged with its own container. To target a
+different database, point the connect string at it.
 
 `run_report.sh` is **fully read-only against the database**: the PL/SQL only
 `SELECT`s (`DBA_HIST_*` and catalog views, plus session-scoped NLS settings)
@@ -69,11 +72,11 @@ separately under `demo/`.
 # Last 2 hours, all containers, / as sysdba
 ./run_report.sh
 
-# A specific past incident, one PDB (CON_ID 3)
-./run_report.sh "/ as sysdba" 2026-07-01T13:30:00 2026-07-01T15:30:00 3
+# A specific past incident window
+./run_report.sh "/ as sysdba" 2026-07-01T13:30:00 2026-07-01T15:30:00
 
 # Named user, custom output name
-./run_report.sh 'c##ashreport/pw@//localhost/cdb1.world' AUTO AUTO ALL report.html
+./run_report.sh 'c##ashreport/pw@//localhost/cdb1.world' AUTO AUTO report.html
 
 # Open the newest report
 open "$(ls -1t reports/*.html | head -n1)"
@@ -85,11 +88,10 @@ HTML into `reports/`.
 ### Investigating a past incident
 
 1. Confirm the window is inside AWR retention.
-2. Find the PDB's `CON_ID` (`select con_id, name from v$pdbs;`) — filtering to
-   one container keeps the report focused.
-3. Run with the incident window padded by ±30 minutes; keep windows to a few
-   hours (the emitter refuses > 100k blocking samples — narrow the window or
-   the container rather than raising the guard).
+2. Run with the incident window padded by ±30 minutes; keep windows to a few
+   hours (the emitter refuses > 100k blocking samples — narrow the window
+   rather than raising the guard). The report spans all containers; blocking
+   chains never cross a container, so per-PDB chains stay cleanly separated.
 4. Read top-down: key findings for the verdict, timeline for who suffered and
    who held the locks, then click into samples for the tree and the
    object/SQL detail.

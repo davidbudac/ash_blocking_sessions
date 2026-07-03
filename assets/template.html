@@ -206,7 +206,6 @@ __DATA_JSON__
 
     document.getElementById('meta').textContent =
       `DB: ${meta.dbName||'?'} (dbid ${meta.dbId||'?'})  ·  Range: ${meta.beginTime||'?'} → ${meta.endTime||'?'}` +
-      (meta.conIdFilter ? `  ·  CON_ID=${meta.conIdFilter}` : '') +
       `  ·  Blocking samples: ${data.length}  ·  Generated: ${meta.generatedAt||'?'}`;
     document.getElementById('counter').textContent = `${data.length} samples`;
 
