@@ -57,8 +57,15 @@ if ! command -v sqlplus >/dev/null 2>&1; then
   exit 1
 fi
 
+# AUTO output name: ash_blocking[_<dbname>]_<timestamp>.html. The DB name isn't
+# known until sqlplus has emitted meta.json, so remember the timestamp now and
+# fold the name in after the split (see below). A caller-supplied name is used
+# verbatim.
+OUT_FILE_AUTO=0
 if [ "$OUT_FILE" = AUTO ] || [ -z "$OUT_FILE" ]; then
-  OUT_FILE="ash_blocking_$(date '+%Y%m%d_%H%M%S').html"
+  OUT_FILE_AUTO=1
+  OUT_TS="$(date '+%Y%m%d_%H%M%S')"
+  OUT_FILE="ash_blocking_$OUT_TS.html"
 fi
 
 # Mask the password when echoing a user/pw@service connect string.
@@ -72,8 +79,10 @@ TMPD="$SCRIPT_DIR/reports/.build.$$"
 mkdir "$TMPD"
 trap 'rm -rf "$TMPD"' EXIT INT TERM
 
+OUT_DISPLAY="$OUT_FILE"
+[ "$OUT_FILE_AUTO" = 1 ] && OUT_DISPLAY="ash_blocking_<dbname>_$OUT_TS.html"
 echo "==> Querying ASH (read-only)"
-echo "    conn=$CONN_DISPLAY  begin=$BEGIN_TIME  end=$END_TIME  out=$OUT_FILE"
+echo "    conn=$CONN_DISPLAY  begin=$BEGIN_TIME  end=$END_TIME  out=$OUT_DISPLAY"
 
 # $CONN is expanded unquoted on purpose: '/ as sysdba' must reach sqlplus as
 # three words. A user/pw@service string has no spaces, so it stays one word.
@@ -107,6 +116,20 @@ if [ ! -s "$TMPD/meta.json" ] || [ ! -s "$TMPD/data.json" ]; then
   echo "       Full output follows:" >&2
   cat "$TMPD/out.log" >&2
   exit 1
+fi
+
+# For an AUTO name, fold the database name into the file name now that meta.json
+# exists. "dbName" is the first field of the meta JSON (from V$DATABASE), so it
+# never straddles a 500-char chunk boundary; still, concatenate the chunk lines
+# before matching to be safe. Sanitize to a filesystem-safe slug (DB names are
+# alnum in practice, but $/#-style chars are legal in a name).
+if [ "$OUT_FILE_AUTO" = 1 ]; then
+  DB_NAME=$(awk '{printf "%s", $0}' "$TMPD/meta.json" \
+            | sed -n 's/.*"dbName" *: *"\([^"]*\)".*/\1/p')
+  DB_SLUG=$(printf '%s' "$DB_NAME" | tr -c 'A-Za-z0-9' '_' | sed 's/_*$//')
+  if [ -n "$DB_SLUG" ]; then
+    OUT_FILE="ash_blocking_${DB_SLUG}_$OUT_TS.html"
+  fi
 fi
 
 # The placeholders must sit ALONE on their own lines in the template, exactly
