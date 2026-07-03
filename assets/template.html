@@ -148,9 +148,15 @@
       <span id="treeTime" style="min-width: 150px; font-family: ui-monospace, SF Mono, Menlo, monospace;">—</span>
       <span id="treeStat" style="color: var(--muted);"></span>
       <span id="treeChain" style="margin-left:auto;"></span>
+      <span class="zoomctl" style="display:inline-flex; gap:3px; margin-left:12px;">
+        <button id="treeZoomOut" title="Zoom out">&#8722;</button>
+        <button id="treeZoomIn" title="Zoom in">&#43;</button>
+        <button id="treeFit" title="Fit the whole chain back into view">Fit</button>
+      </span>
     </div>
-    <div id="chart-tree" style="height: 420px"></div>
-    <div class="footnote"><b>Root blockers anchor the left</b>, waiters cascade right by depth; arrows point waiter → blocker. <b>Node size = downstream impact</b>, so the true root cause is the biggest dot. Blue = waiter, orange = blocks &amp; waits, red = root blocker. Hover an edge for its wait event; click a node to list its own + downstream samples below; drag / scroll to zoom.</div>
+    <div id="chart-tree" style="height: 480px; min-height: 300px; resize: vertical; overflow: hidden;"></div>
+    <div class="footnote"><b>Root blockers anchor the left</b>, waiters cascade right by depth; arrows point waiter → blocker. <b>Node size = downstream impact</b>, so the true root cause is the biggest dot. Blue = waiter, orange = blocks &amp; waits, red = root blocker. Hover an edge for its wait event; click a node to list its own + downstream samples below.
+      <b>Scroll to zoom, drag the background to pan</b> — or use the <b>&minus; / + / Fit</b> buttons above (handy when 50+ sessions fan in on one blocker). Drag the bottom edge of the panel to make it taller.</div>
   </section>
 
   <section>
@@ -203,6 +209,12 @@ __DATA_JSON__
     // from this selection; the key-findings summary always covers the whole window.
     let selectedT = null;      // focused sample_time (ms); set to the peak sample on load
     let selectedRoot = null;   // window-level chain root (sid key), or null = all chains
+
+    // Tree pan/zoom state. Persisted across sample-stepping and chain isolation so
+    // you can zoom into a big fan-in once and scan through samples at that zoom.
+    // roam:true handles native wheel-zoom + drag-pan; these drive the +/-/Fit
+    // buttons and re-seed the graph on every full re-render. center=null => fit.
+    let treeZoom = 1, treeCenter = null;
 
     document.getElementById('meta').textContent =
       `DB: ${meta.dbName||'?'} (dbid ${meta.dbId||'?'})  ·  Range: ${meta.beginTime||'?'} → ${meta.endTime||'?'}` +
@@ -1033,6 +1045,7 @@ __DATA_JSON__
             { name: 'root blocker', itemStyle: { color: '#c0392b' } }
           ],
           roam: true, draggable: true,
+          zoom: treeZoom, center: treeCenter,
           edgeLabel: { show: false, fontSize: 9 },
           edgeSymbol: ['none','arrow'], edgeSymbolSize: 8,
           data: nodes, links,
@@ -1060,6 +1073,29 @@ __DATA_JSON__
           showSamples(all, n.isBlocker ? `Chain under ${n.id} at ${fmtTs(selectedT)}` : `Node ${n.id} at ${fmtTs(selectedT)}`);
         }
       });
+    }
+
+    // Zoom / fit controls for the tree. Read the live roam state back from the
+    // chart so the buttons compose with native wheel-zoom + drag-pan (roam mutates
+    // the series option in place), then re-apply via a merge setOption.
+    function treeApplyZoom() {
+      treeZoom = Math.max(0.15, Math.min(30, treeZoom));
+      treeChart.setOption({ series: [{ zoom: treeZoom, center: treeCenter }] });
+    }
+    function treeSyncFromChart() {
+      const opt = treeChart.getOption && treeChart.getOption();
+      const s = opt && opt.series && opt.series[0];
+      if (s) { if (s.zoom) treeZoom = s.zoom; if (s.center) treeCenter = s.center; }
+    }
+    document.getElementById('treeZoomIn').onclick  = () => { treeSyncFromChart(); treeZoom *= 1.4; treeApplyZoom(); };
+    document.getElementById('treeZoomOut').onclick = () => { treeSyncFromChart(); treeZoom /= 1.4; treeApplyZoom(); };
+    // Fit: drop back to the auto-fitted whole-chain view (center=null => ECharts
+    // recentres on the graph's bounding box). Full re-render guarantees the fit.
+    document.getElementById('treeFit').onclick = () => { treeZoom = 1; treeCenter = null; renderTreePanel(); };
+
+    // Keep the canvas in sync when the user drags the panel's resize handle.
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => treeChart.resize()).observe(document.getElementById('chart-tree'));
     }
 
     // Prev / next / play — step the selection through the ASH samples.
