@@ -18,13 +18,13 @@ Everything runs locally where the repo lives — a plain `sqlplus` invocation, n
 ./demo/run_seed.sh "/ as sysdba" 60       # 60s wait (quick smoke test, less ASH data)
 
 # Build the HTML report (runs sqlplus locally; writes into reports/).
-# Args are positional: [connect_string] [begin] [end] [con_id] [out_file];
-# 'AUTO' / 'ALL' fall back to defaults. Arg 1 is the sqlplus connect string
-# ('AUTO' = '/ as sysdba'); quote it if it contains spaces.
+# Args are positional: [connect_string] [begin] [end] [out_file];
+# 'AUTO' falls back to defaults. Arg 1 is the sqlplus connect string
+# ('AUTO' = '/ as sysdba'); quote it if it contains spaces. The report always
+# covers every container in the connected CDB — there is no per-container arg.
 ./run_report.sh                                                    # / as sysdba, last 2h, all containers
 ./run_report.sh "/ as sysdba" 2026-05-20T10:00:00 2026-05-20T14:00:00  # explicit window
-./run_report.sh AUTO AUTO AUTO 3                                   # last 2h, only PDB1
-./run_report.sh 'c##rep/pw@//localhost/cdb1.world' AUTO AUTO ALL report.html  # named common user
+./run_report.sh 'c##rep/pw@//localhost/cdb1.world' AUTO AUTO report.html  # named common user
 
 # Open the latest report locally
 open "$(ls -1t reports/*.html | head -n1)"
@@ -38,8 +38,8 @@ There is **no build, no lint, no test runner**. UI iteration is done by editing 
 
 ## How a report is produced
 
-1. **`run_report.sh`** `cd`s to its own directory and runs `sqlplus -S -L <connect_string> @build_report.sql <begin> <end> <con_id>` (connect string is arg 1; default `/ as sysdba`), capturing **all stdout** into `reports/.build.$$/out.log`. A named user must be a **common** user connected to `CDB$ROOT` with `CREATE SESSION` and `SELECT_CATALOG_ROLE` — nothing else; there are no directory objects and no DDL anywhere in the report path.
-2. **`build_report.sql`** is the driver. It sources `sql/00_settings.sql` (non-interactive SQL*Plus settings, NLS formats, `WHENEVER SQLERROR EXIT FAILURE`, and **`SET TAB OFF`** — see gotchas), defines the three positional args (`begin_time`, `end_time`, `con_id_arg`), then sources `sql/20_emit_html.sql`.
+1. **`run_report.sh`** `cd`s to its own directory and runs `sqlplus -S -L <connect_string> @build_report.sql <begin> <end>` (connect string is arg 1; default `/ as sysdba`), capturing **all stdout** into `reports/.build.$$/out.log`. A named user must be a **common** user connected to `CDB$ROOT` with `CREATE SESSION` and `SELECT_CATALOG_ROLE` — nothing else; there are no directory objects and no DDL anywhere in the report path.
+2. **`build_report.sql`** is the driver. It sources `sql/00_settings.sql` (non-interactive SQL*Plus settings, NLS formats, `WHENEVER SQLERROR EXIT FAILURE`, and **`SET TAB OFF`** — see gotchas), defines the two positional args (`begin_time`, `end_time`), then sources `sql/20_emit_html.sql`.
 3. **`sql/20_emit_html.sql`** is the core PL/SQL block. It:
    - Counts blocking samples in the window. Refuses to render if `> 100000` (raises `-20001`).
    - Builds the data CLOB with `JSON_ARRAYAGG(JSON_OBJECT(... ABSENT ON NULL ... RETURNING CLOB))`. The query **left-joins `DBA_HIST_ACTIVE_SESS_HISTORY` to itself** on `(dbid, snap_id, sample_id, blocking_inst_id, blocking_session, blocking_session_serial#)` to enrich each row with what the blocker was doing in the same sample (fields prefixed `b*`: `bEv`, `bSqlId`, `bMod`, `bAct`, `bProg`, `bMach`, `bUser`, …). Usernames and the waiter's contended object (`obj`, from `CURRENT_OBJ#`) come from **`CDB_USERS`/`CDB_OBJECTS` joined on `(con_id, id)`** — the plain `DBA_*` views in `CDB$ROOT` can't see PDB users/objects, so don't "simplify" those joins back. The meta JSON additionally carries `sqlText`, a `sql_id → first-200-chars` map (from `DBA_HIST_SQLTEXT`) for every SQL that ran in the window, so the report can show statement text offline (`sqlSnip()` in the template; degrades gracefully when absent).
@@ -140,7 +140,7 @@ To test multiple concurrent chains and multiple wait *classes* (colors), generat
                               # (./demo/run_seed.sh "/ as sysdba" 60 for a quick smoke test;
                               #  it prompts for confirmation — ASH_SEED_FORCE=1 to skip)
 # copy the suggested window it prints, then:
-./run_report.sh AUTO <begin> <end> 3   # AUTO = / as sysdba; CON_ID 3 = PDB1
+./run_report.sh AUTO <begin> <end>   # AUTO = / as sysdba; covers all containers
 ```
 
 Then **verify the real data mix** before trusting the render — extract the embedded `window.ASH_DATA` from the generated `reports/ash_blocking_<ts>.html` and tally distinct `ev`/`wc` and how many samples carry >1 wait event at once. A healthy run shows `enq: TX - row lock contention`, `enq: TM - contention`, and `enq: UL - contention` overlapping across multiple samples. If everything collapsed to a single event, a lock leaked across runs (see gotchas) — re-seed. Finally, run the level-2 harness against the generated report to confirm it renders without throwing.
@@ -149,9 +149,9 @@ Then **verify the real data mix** before trusting the render — extract the emb
 
 ## Operational gotchas
 
-- `build_report.sql` must connect as SYSDBA in `CDB$ROOT` (or a common user with `SELECT_CATALOG_ROLE`) because `DBA_HIST_ACTIVE_SESS_HISTORY` lives there. The `CON_ID` argument filters at query time.
+- `build_report.sql` must connect as SYSDBA in `CDB$ROOT` (or a common user with `SELECT_CATALOG_ROLE`) because `DBA_HIST_ACTIVE_SESS_HISTORY` lives there. The report reads **all containers** (no `CON_ID` filter); each emitted row still carries its own `conId`, and blocking chains never cross a container.
 - The scripts are POSIX `sh` for AIX: no `set -o pipefail`, no `[[ ... ]]`/`=~` (uses `case`), no arrays. Keep them bash-free so they run under the AIX `/bin/sh` (ksh88). They rely on `sqlplus` being on `PATH` — set the Oracle env (`. oraenv`) first.
-- The 100k-sample guard in `20_emit_html.sql` is a safety against running a multi-day window. Narrow the window or filter by `CON_ID` rather than raising the limit.
+- The 100k-sample guard in `20_emit_html.sql` is a safety against running a multi-day window. Narrow the window rather than raising the limit.
 - Seed jobs (`ASH_TEST.ASH_DEMO_*`) are created with `auto_drop => TRUE`; they vanish after their `DBMS_LOCK.SLEEP` completes. No cleanup step needed.
 - **`SET TAB OFF` in `sql/00_settings.sql` is load-bearing.** SQL\*Plus's default `TAB ON` rewrites runs of output spaces into literal TAB characters at tab stops — an unescaped control character inside the JSON payload, which breaks `JSON.parse` in the report (bit us live: a `sqlText` snippet with two consecutive spaces). Similarly, the `#` sentinels around chunk lines exist because SQL\*Plus strips trailing whitespace from output lines. Don't remove either.
 - **The stdout protocol is the contract** between `sql/20_emit_html.sql` and `run_report.sh`: marker lines, `#`-wrapped ≤500-char chunks, no-newline joining. If you change one side, change the other; the chunk size must stay ≤500 chars so AIX line-based tools never see a record over `LINE_MAX`.

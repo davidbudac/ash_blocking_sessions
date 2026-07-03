@@ -20,7 +20,12 @@
 -- Expects DEFINEs set by the driver:
 --   begin_time  ISO 'YYYY-MM-DDTHH24:MI:SS' or 'AUTO' (= SYSTIMESTAMP - 2h)
 --   end_time    ISO 'YYYY-MM-DDTHH24:MI:SS' or 'AUTO' (= SYSTIMESTAMP)
---   con_id_arg  '' / 'NULL' / 'ALL' for no filter, otherwise a CON_ID number
+--
+-- Always reports across every container in the connected CDB. AWR/ASH lives in
+-- CDB$ROOT, so the report connects there (via the connect string) and reads all
+-- containers at once; each emitted row still carries its own 'conId'. Blocking
+-- chains never span containers, so a multi-PDB report shows cleanly separated
+-- chains without any server-side container filter.
 
 DECLARE
   c_fmt         CONSTANT VARCHAR2(40) := 'YYYY-MM-DD"T"HH24:MI:SS';
@@ -33,8 +38,6 @@ DECLARE
   l_end_arg     VARCHAR2(40) := TRIM('&end_time');
   l_begin       TIMESTAMP;
   l_end         TIMESTAMP;
-  l_con_id_arg  VARCHAR2(32) := TRIM('&con_id_arg');
-  l_con_id      NUMBER;
 
   l_row_count   NUMBER;
   l_data        CLOB;
@@ -67,14 +70,8 @@ BEGIN
     l_end := TO_TIMESTAMP(l_end_arg, c_fmt);
   END IF;
 
-  IF l_con_id_arg IS NULL OR UPPER(l_con_id_arg) IN ('NULL', 'ALL', '') THEN
-    l_con_id := NULL;
-  ELSE
-    l_con_id := TO_NUMBER(l_con_id_arg);
-  END IF;
-
   DBMS_OUTPUT.PUT_LINE('Window : ' || TO_CHAR(l_begin, c_fmt) || ' .. ' || TO_CHAR(l_end, c_fmt));
-  DBMS_OUTPUT.PUT_LINE('CON_ID : ' || NVL(TO_CHAR(l_con_id), '(all)'));
+  DBMS_OUTPUT.PUT_LINE('Scope  : all containers');
 
   -- 1. Count first so we can warn / refuse on huge windows.
   SELECT COUNT(*)
@@ -82,15 +79,14 @@ BEGIN
     FROM dba_hist_active_sess_history
    WHERE sample_time BETWEEN l_begin AND l_end
      AND blocking_session IS NOT NULL
-     AND blocking_session_status IN ('VALID', 'NOT IN WAIT', 'GLOBAL')
-     AND (l_con_id IS NULL OR con_id = l_con_id);
+     AND blocking_session_status IN ('VALID', 'NOT IN WAIT', 'GLOBAL');
 
   DBMS_OUTPUT.PUT_LINE('Blocking samples found: ' || l_row_count);
 
   IF l_row_count > 100000 THEN
     RAISE_APPLICATION_ERROR(-20001,
       'Too many blocking samples (' || l_row_count ||
-      '). Narrow the time range or filter by CON_ID.');
+      '). Narrow the time range.');
   END IF;
 
   -- 2. Build data JSON. Left-join blocker's own sample row (when the blocker
@@ -115,7 +111,6 @@ BEGIN
              current_obj#
         FROM dba_hist_active_sess_history
        WHERE sample_time BETWEEN l_begin AND l_end
-         AND (l_con_id IS NULL OR con_id = l_con_id)
     )
     SELECT JSON_ARRAYAGG(
              JSON_OBJECT(
@@ -180,7 +175,6 @@ BEGIN
            'endTime'     VALUE TO_CHAR(l_end,   'YYYY-MM-DD"T"HH24:MI:SS'),
            'generatedAt' VALUE TO_CHAR(SYSTIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS'),
            'rowCount'    VALUE l_row_count,
-           'conIdFilter' VALUE l_con_id,
            -- sql_id -> first 200 chars of the statement, for every SQL that ran
            -- in the window (superset of waiter + blocker SQL ids), so the report
            -- can show what the SQL was without a trip back to the DB.
@@ -194,7 +188,6 @@ BEGIN
                             FROM dba_hist_active_sess_history
                            WHERE sample_time BETWEEN l_begin AND l_end
                              AND sql_id IS NOT NULL
-                             AND (l_con_id IS NULL OR con_id = l_con_id)
                         )
                   GROUP BY st.sql_id
                ) x

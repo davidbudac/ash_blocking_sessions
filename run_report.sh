@@ -9,12 +9,15 @@
 # the report always lands here, next to the script.
 #
 # Usage:
-#   ./run_report.sh [connect_string] [begin_time] [end_time] [con_id] [out_file]
+#   ./run_report.sh [connect_string] [begin_time] [end_time] [out_file]
 #
 #   ./run_report.sh                                        # / as sysdba, last 2h, all containers
 #   ./run_report.sh "/ as sysdba" 2026-05-20T10:00:00 2026-05-20T14:00:00
-#   ./run_report.sh AUTO AUTO AUTO 3                       # default conn, last 2h, only CON_ID=3
-#   ./run_report.sh 'rep/pw@//dbhost:1521/cdb1.world' AUTO AUTO ALL report.html
+#   ./run_report.sh 'rep/pw@//dbhost:1521/cdb1.world' AUTO AUTO report.html
+#
+# The report always covers every container in the connected CDB (AWR/ASH lives
+# in CDB$ROOT; connect there). To target a different database, point the
+# connect string at it — there is no per-container argument.
 #
 # The first argument is the sqlplus connect string ('AUTO' = '/ as sysdba', i.e.
 # OS auth to CDB$ROOT). A named user needs CREATE SESSION and
@@ -30,8 +33,7 @@ set -eu
 CONN="${1:-AUTO}"
 BEGIN_TIME="${2:-AUTO}"
 END_TIME="${3:-AUTO}"
-CON_ID="${4:-ALL}"
-OUT_FILE="${5:-AUTO}"
+OUT_FILE="${4:-AUTO}"
 
 # Catch the pre-connect-string calling convention (times used to come first).
 case "$CONN" in
@@ -71,13 +73,13 @@ mkdir "$TMPD"
 trap 'rm -rf "$TMPD"' EXIT INT TERM
 
 echo "==> Querying ASH (read-only)"
-echo "    conn=$CONN_DISPLAY  begin=$BEGIN_TIME  end=$END_TIME  con_id=$CON_ID  out=$OUT_FILE"
+echo "    conn=$CONN_DISPLAY  begin=$BEGIN_TIME  end=$END_TIME  out=$OUT_FILE"
 
 # $CONN is expanded unquoted on purpose: '/ as sysdba' must reach sqlplus as
 # three words. A user/pw@service string has no spaces, so it stays one word.
 RC=0
 sqlplus -S -L $CONN @build_report.sql \
-  "$BEGIN_TIME" "$END_TIME" "$CON_ID" > "$TMPD/out.log" 2>&1 || RC=$?
+  "$BEGIN_TIME" "$END_TIME" > "$TMPD/out.log" 2>&1 || RC=$?
 if [ "$RC" -ne 0 ]; then
   echo "ERROR: sqlplus failed (exit $RC). Output follows:" >&2
   cat "$TMPD/out.log" >&2

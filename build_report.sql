@@ -1,12 +1,13 @@
 -- Driver for the ASH Blocking Sessions HTML report.
 --
 -- Usage (from sqlplus):
---   @build_report.sql <begin_time> <end_time> <con_id>
+--   @build_report.sql <begin_time> <end_time>
 --
--- Arguments — all three required (pass 'AUTO' / 'ALL' for defaults):
+-- Arguments — both required (pass 'AUTO' for defaults):
 --   <begin_time>  'YYYY-MM-DDTHH24:MI:SS' or 'AUTO' (= now - 2h)
 --   <end_time>    'YYYY-MM-DDTHH24:MI:SS' or 'AUTO' (= now)
---   <con_id>      Numeric CON_ID, or 'ALL' to include every container
+--
+-- The report always covers every container in the connected CDB.
 --
 -- Fully read-only: only SELECTs (DBA_HIST_*, CDB_USERS, CDB_OBJECTS,
 -- V$DATABASE) plus session-scoped NLS settings. No DDL, no DML, no directory
@@ -20,7 +21,6 @@
 
 DEFINE begin_time = &1
 DEFINE end_time   = &2
-DEFINE con_id_arg = &3
 
 @@sql/20_emit_html.sql
 
