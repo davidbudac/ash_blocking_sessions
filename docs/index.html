@@ -1,0 +1,1217 @@
+<!DOCTYPE html>
+<html lang="en" data-theme-default>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASH Blocking Sessions Timeline — who blocked whom, for how long, and why</title>
+<meta name="description" content="A read-only Oracle tool that turns DBA_HIST_ACTIVE_SESS_HISTORY blocking samples into one self-contained, interactive HTML report: a per-session timeline and a click-through blocking tree for any 10-second ASH sample.">
+<meta name="author" content="David Budac">
+<link rel="canonical" href="https://davidbudac.github.io/ash_blocking_sessions/">
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#eaeef3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b1119" media="(prefers-color-scheme: dark)">
+
+<!-- Open Graph / social cards -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ASH Blocking Sessions Timeline">
+<meta property="og:title" content="ASH Blocking Sessions Timeline — who blocked whom, for how long, and why">
+<meta property="og:description" content="A read-only Oracle tool that rebuilds a locking incident from DBA_HIST ASH into one self-contained, interactive HTML report — a per-session timeline and a click-through blocking tree for any 10-second sample.">
+<meta property="og:url" content="https://davidbudac.github.io/ash_blocking_sessions/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="ASH Blocking Sessions Timeline">
+<meta name="twitter:description" content="Rebuild an Oracle locking incident from DBA_HIST ASH into one self-contained, interactive HTML report — read-only, zero database footprint.">
+
+<!-- Set theme before paint to avoid a flash -->
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('ash-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+})();
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+/* ============================================================
+   ASH Blocking Sessions Timeline — landing page
+   Direction A: blocking chain as hero / observability console.
+   Palette derived from the report's own OEM wait-signal colors:
+   red = contention/root, blue = waiter, amber = holds-and-waits.
+   ============================================================ */
+
+/* ---------- Theme tokens ---------- */
+:root {
+  /* Light (cool instrument light — deliberately NOT cream) */
+  --bg:        #eaeef3;
+  --bg-2:      #e2e8ee;
+  --panel:     #ffffff;
+  --panel-2:   #f3f6f9;
+  --inset:     #eef2f6;
+  --border:    #d3dde6;
+  --border-2:  #c3d0dc;
+  --ink:       #16232f;
+  --ink-2:     #33465a;
+  --muted:     #5c7186;
+  --faint:     #8697a8;
+
+  --root:      #cc2f30;   /* contention / root blocker */
+  --root-soft: rgba(204,47,48,0.10);
+  --waiter:    #1f77b4;   /* waiting session */
+  --waiter-soft: rgba(31,119,180,0.10);
+  --holds:     #c26a1c;   /* holds a lock and waits */
+  --holds-soft: rgba(194,106,28,0.12);
+
+  --shadow:    0 1px 2px rgba(16,35,47,0.05), 0 12px 30px rgba(16,35,47,0.07);
+  --grid-line: rgba(22,35,47,0.05);
+  --focus:     #1f77b4;
+  --glow-root: rgba(204,47,48,0.30);
+}
+
+/* OS-preference dark (only when user hasn't chosen light) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0b1119;
+    --bg-2:      #0e1622;
+    --panel:     #121d29;
+    --panel-2:   #16232f;
+    --inset:     #0e1a25;
+    --border:    #22333f;
+    --border-2:  #2c4150;
+    --ink:       #e8eff5;
+    --ink-2:     #b6c6d3;
+    --muted:     #8ba0b1;
+    --faint:     #5f7688;
+
+    --root:      #f0555b;
+    --root-soft: rgba(240,85,91,0.14);
+    --waiter:    #56a8e6;
+    --waiter-soft: rgba(86,168,230,0.14);
+    --holds:     #eb9a4e;
+    --holds-soft: rgba(235,154,78,0.16);
+
+    --shadow:    0 1px 0 rgba(255,255,255,0.02), 0 18px 44px rgba(0,0,0,0.5);
+    --grid-line: rgba(255,255,255,0.045);
+    --focus:     #56a8e6;
+    --glow-root: rgba(240,85,91,0.45);
+  }
+}
+
+/* Manual dark override (wins over OS light) */
+:root[data-theme="dark"] {
+  --bg:        #0b1119;
+  --bg-2:      #0e1622;
+  --panel:     #121d29;
+  --panel-2:   #16232f;
+  --inset:     #0e1a25;
+  --border:    #22333f;
+  --border-2:  #2c4150;
+  --ink:       #e8eff5;
+  --ink-2:     #b6c6d3;
+  --muted:     #8ba0b1;
+  --faint:     #5f7688;
+
+  --root:      #f0555b;
+  --root-soft: rgba(240,85,91,0.14);
+  --waiter:    #56a8e6;
+  --waiter-soft: rgba(86,168,230,0.14);
+  --holds:     #eb9a4e;
+  --holds-soft: rgba(235,154,78,0.16);
+
+  --shadow:    0 1px 0 rgba(255,255,255,0.02), 0 18px 44px rgba(0,0,0,0.5);
+  --grid-line: rgba(255,255,255,0.045);
+  --focus:     #56a8e6;
+  --glow-root: rgba(240,85,91,0.45);
+}
+
+/* ---------- Base ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", "Menlo", "Consolas", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, system-ui, sans-serif;
+  --display: "Space Grotesk", var(--sans);
+  --maxw: 1120px;
+}
+
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background:
+    radial-gradient(1100px 620px at 82% -6%, var(--waiter-soft), transparent 60%) no-repeat,
+    radial-gradient(900px 520px at 6% 1%, var(--root-soft), transparent 55%) no-repeat,
+    linear-gradient(var(--bg), var(--bg-2)) no-repeat;
+  background-size: 100% 1400px, 100% 1400px, 100% 100%;
+  line-height: 1.6;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a { color: inherit; }
+img, svg { max-width: 100%; }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.skip {
+  position: absolute; left: -9999px; top: 0;
+  background: var(--panel); color: var(--ink);
+  padding: 10px 16px; border: 1px solid var(--border-2);
+  border-radius: 8px; z-index: 200; font-weight: 600;
+}
+.skip:focus { left: 16px; top: 12px; }
+
+/* ---------- Layout helpers ---------- */
+.wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+.band { padding: 72px 0; }
+@media (max-width: 640px) { .band { padding: 52px 0; } }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 18px;
+}
+.eyebrow::before {
+  content: "";
+  width: 22px; height: 1px;
+  background: var(--border-2);
+}
+.eyebrow.hot { color: var(--root); }
+
+h1, h2, h3 { font-family: var(--display); font-weight: 600; letter-spacing: -0.02em; line-height: 1.08; margin: 0; }
+h2 { font-size: clamp(26px, 3.4vw, 38px); }
+h3 { font-size: 18px; letter-spacing: -0.01em; }
+p { margin: 0 0 1rem; }
+.lead { font-size: clamp(16px, 1.6vw, 18px); color: var(--ink-2); max-width: 62ch; }
+
+.mono { font-family: var(--mono); }
+.sid  { font-family: var(--mono); font-weight: 600; letter-spacing: 0.01em; }
+
+/* ---------- Nav ---------- */
+header.nav {
+  position: sticky; top: 0; z-index: 100;
+  backdrop-filter: saturate(1.4) blur(10px);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.nav-inner { display: flex; align-items: center; gap: 18px; height: 60px; }
+.brand { display: inline-flex; align-items: center; gap: 11px; font-family: var(--display); font-weight: 600; letter-spacing: -0.01em; text-decoration: none; font-size: 15.5px; }
+.brand .glyph { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; }
+.brand b { font-weight: 600; }
+.brand span { color: var(--muted); font-weight: 500; }
+.nav-links { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.nav-links a.navlink {
+  font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.02em;
+  color: var(--muted); text-decoration: none;
+  padding: 8px 12px; border-radius: 8px;
+}
+.nav-links a.navlink:hover { color: var(--ink); background: var(--panel-2); }
+@media (max-width: 860px) { .nav-links a.navlink { display: none; } }
+@media (max-width: 560px) {
+  .nav-inner { gap: 10px; }
+  .brand { font-size: 14px; gap: 9px; min-width: 0; flex: 0 1 auto; }
+  .brand b { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .brand span { display: none; }
+}
+
+.iconbtn {
+  display: inline-grid; place-items: center;
+  width: 38px; height: 38px; flex: none;
+  border: 1px solid var(--border); border-radius: 9px;
+  background: var(--panel); color: var(--ink);
+  cursor: pointer;
+}
+.iconbtn:hover { border-color: var(--border-2); }
+.iconbtn svg { width: 17px; height: 17px; }
+.iconbtn .moon { display: none; }
+:root[data-theme="dark"] .iconbtn .sun { display: none; }
+:root[data-theme="dark"] .iconbtn .moon { display: block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .iconbtn .sun { display: none; }
+  :root:not([data-theme="light"]) .iconbtn .moon { display: block; }
+}
+
+.gh-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 12.5px; font-weight: 500;
+  padding: 8px 13px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--panel);
+  color: var(--ink); text-decoration: none;
+}
+.gh-pill:hover { border-color: var(--border-2); }
+.gh-pill .star { color: var(--holds); }
+@media (max-width: 460px) { .gh-pill .lbl { display: none; } }
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-family: var(--display); font-weight: 600; font-size: 15px;
+  padding: 13px 20px; border-radius: 11px;
+  text-decoration: none; cursor: pointer; border: 1px solid transparent;
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease, background .12s ease;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: var(--ink); color: var(--bg);
+  box-shadow: 0 6px 18px rgba(16,35,47,0.18);
+}
+.btn-primary .dia { color: var(--root); }
+.btn-primary:hover { box-shadow: 0 10px 26px rgba(16,35,47,0.26); transform: translateY(-1px); }
+:root[data-theme="dark"] .btn-primary { color: #0b1119; }
+.btn-ghost {
+  background: var(--panel); color: var(--ink); border-color: var(--border-2);
+}
+.btn-ghost:hover { border-color: var(--waiter); color: var(--ink); }
+.btn-ghost .star { color: var(--holds); }
+@media (prefers-reduced-motion: reduce) { .btn, .btn:hover { transform: none; } }
+
+/* ---------- Hero ---------- */
+.hero { padding-top: 46px; }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr); gap: 40px; align-items: center; }
+@media (max-width: 940px) { .hero-grid { grid-template-columns: 1fr; gap: 30px; } }
+
+.hero h1 { font-size: clamp(33px, 5.4vw, 56px); font-weight: 600; }
+.hero h1 .q { color: var(--ink); }
+.hero .lead { margin-top: 20px; }
+.hero .lead code { font-family: var(--mono); font-size: 0.86em; background: var(--panel-2); border: 1px solid var(--border); padding: 1px 6px; border-radius: 5px; color: var(--ink-2); }
+
+.cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+.trust {
+  margin-top: 18px; font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+}
+.trust b { color: var(--ink-2); font-weight: 600; }
+.trust .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--waiter); display: inline-block; }
+.trust .dot.r { background: var(--root); }
+.trust .dot.a { background: var(--holds); }
+
+/* ---------- Signature console panel ---------- */
+.console {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 100%, transparent), var(--panel-2));
+  border: 1px solid var(--border-2);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.console-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+  background: var(--panel-2);
+}
+.console-bar .live {
+  display: inline-flex; align-items: center; gap: 7px; color: var(--root);
+  letter-spacing: 0.06em;
+}
+.console-bar .live .beat {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--root);
+  box-shadow: 0 0 0 0 var(--glow-root);
+  animation: beat 2.6s ease-out infinite;
+}
+@keyframes beat {
+  0% { box-shadow: 0 0 0 0 var(--glow-root); }
+  70% { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.console-bar .sample { margin-left: auto; }
+.console-body { padding: 8px 6px 4px; }
+.chainsvg { display: block; width: 100%; height: auto; }
+
+/* pulses travel waiter -> root; disabled under reduced motion */
+.pulse { stroke-dasharray: 10 320; }
+.p1 { animation: flow 2.6s linear infinite; }
+.p2 { animation: flow 2.6s linear infinite .5s; }
+.p3 { animation: flow 2.6s linear infinite 1.15s; }
+.p4 { animation: flow 2.6s linear infinite 1.7s; }
+@keyframes flow { from { stroke-dashoffset: 330; } to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .pulse { display: none; }
+  .console-bar .live .beat { animation: none; }
+}
+
+.verdict {
+  display: flex; gap: 12px; align-items: flex-start;
+  margin: 4px 10px 12px; padding: 12px 14px;
+  border-radius: 11px;
+  background: var(--root-soft);
+  border: 1px solid color-mix(in srgb, var(--root) 30%, transparent);
+}
+.verdict .vmark { color: var(--root); font-size: 15px; line-height: 1.5; }
+.verdict .vtxt { font-size: 13.5px; color: var(--ink-2); }
+.verdict .vtxt b { color: var(--ink); font-family: var(--mono); font-weight: 600; }
+.verdict .vlabel { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--root); display: block; margin-bottom: 2px; }
+
+.legend {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  padding: 0 16px 14px; font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+}
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend .k { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.legend .k.w { background: var(--waiter); }
+.legend .k.a { background: var(--holds); }
+.legend .k.r { width: 12px; height: 12px; border-radius: 2px; transform: rotate(45deg); background: var(--root); }
+
+/* ---------- Generic section heading ---------- */
+.sec-head { max-width: 64ch; margin-bottom: 34px; }
+.sec-head p { color: var(--ink-2); margin-top: 12px; }
+
+/* ---------- Problem band ---------- */
+.problem { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--panel); }
+.problem-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 40px; align-items: center; }
+@media (max-width: 820px) { .problem-grid { grid-template-columns: 1fr; gap: 26px; } }
+.problem h2 { font-size: clamp(23px, 3vw, 31px); }
+.problem .now-then { display: grid; gap: 12px; }
+.nt {
+  display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start;
+  padding: 15px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2);
+}
+.nt .tag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; padding: 4px 8px; border-radius: 6px; white-space: nowrap; }
+.nt.a .tag { color: var(--root); background: var(--root-soft); }
+.nt.b .tag { color: var(--waiter); background: var(--waiter-soft); }
+.nt div p { margin: 0; font-size: 14.5px; color: var(--ink-2); }
+.nt div strong { color: var(--ink); }
+
+/* ---------- Views ---------- */
+.views-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+@media (max-width: 900px) { .views-grid { grid-template-columns: 1fr; } }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 22px 24px;
+  box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+}
+.card .q-eyebrow {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 12px;
+}
+.card h3 { margin-bottom: 8px; }
+.card p { font-size: 14.5px; color: var(--ink-2); margin: 0; }
+.card .figure {
+  margin-top: 18px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--inset); padding: 14px; overflow: hidden;
+}
+.card .figure svg { display: block; width: 100%; height: auto; }
+
+/* verdict mini (card 1) */
+.vmini { font-family: var(--mono); }
+.vmini .row1 { display: flex; align-items: center; gap: 9px; font-size: 15px; }
+.vmini .dia { color: var(--root); }
+.vmini .who { color: var(--ink); font-weight: 600; }
+.vmini .mod { color: var(--muted); font-size: 12px; }
+.vmini .state { margin-top: 8px; color: var(--root); font-size: 12.5px; }
+.vmini .chips { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 7px; }
+.vmini .chip { font-size: 11px; color: var(--ink-2); background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; }
+.vmini .chip b { color: var(--ink); }
+
+/* ---------- Safety band ---------- */
+.safety {
+  border-top: 1px solid var(--border);
+  background:
+    radial-gradient(700px 380px at 88% 0%, var(--waiter-soft), transparent 60%),
+    var(--panel);
+}
+.safety .sec-head h2 { max-width: 20ch; }
+.safety-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 820px) { .safety-grid { grid-template-columns: 1fr; } }
+.slab {
+  border: 1px solid var(--border); border-radius: 14px; padding: 22px; background: var(--panel-2);
+}
+.slab.runs { border-color: color-mix(in srgb, var(--waiter) 34%, var(--border)); }
+.slab.never { border-color: color-mix(in srgb, var(--root) 30%, var(--border)); }
+.slab h3 { font-size: 15px; display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
+.slab h3 .mk { font-family: var(--mono); font-size: 12px; padding: 3px 8px; border-radius: 6px; }
+.slab.runs h3 .mk { color: var(--waiter); background: var(--waiter-soft); }
+.slab.never h3 .mk { color: var(--root); background: var(--root-soft); }
+.slab ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.slab li { display: grid; grid-template-columns: 18px 1fr; gap: 11px; font-size: 14px; color: var(--ink-2); }
+.slab li b { color: var(--ink); font-weight: 600; }
+.slab li .m { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+.tick { color: var(--waiter); }
+.cross { color: var(--root); }
+.slab li svg { width: 16px; height: 16px; margin-top: 3px; }
+
+.priv {
+  margin-top: 20px; padding: 16px 18px; border: 1px dashed var(--border-2); border-radius: 12px;
+  background: var(--inset); display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+}
+.priv .label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.priv code { font-family: var(--mono); font-size: 13px; color: var(--ink); background: var(--panel); border: 1px solid var(--border); padding: 3px 8px; border-radius: 6px; }
+.priv .plus { color: var(--faint); }
+
+/* ---------- Demo ---------- */
+.demo .sec-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 18px; max-width: none; }
+.browser {
+  border: 1px solid var(--border-2); border-radius: 14px; overflow: hidden;
+  box-shadow: var(--shadow); background: var(--panel);
+}
+.browser-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.browser-bar .dots { display: inline-flex; gap: 7px; flex: none; }
+.browser-bar .dots i { width: 11px; height: 11px; border-radius: 50%; background: var(--border-2); display: block; }
+.browser-bar .url {
+  flex: 1; min-width: 0;
+  font-family: var(--mono); font-size: 12px; color: var(--muted);
+  background: var(--inset); border: 1px solid var(--border); border-radius: 7px;
+  padding: 6px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.browser-bar .url b { color: var(--ink-2); font-weight: 500; }
+.browser-bar .open {
+  flex: none; font-family: var(--mono); font-size: 12.5px; font-weight: 500;
+  text-decoration: none; color: var(--waiter);
+  border: 1px solid color-mix(in srgb, var(--waiter) 40%, var(--border));
+  padding: 6px 11px; border-radius: 8px; white-space: nowrap;
+}
+.browser-bar .open:hover { background: var(--waiter-soft); }
+@media (max-width: 560px) { .browser-bar .open .t { display: none; } }
+
+.viewport { position: relative; background: #ffffff; }
+.viewport iframe { display: block; width: 100%; height: 720px; border: 0; background: #fff; }
+@media (max-width: 700px) { .viewport iframe { height: 560px; } }
+.iframe-loading {
+  position: absolute; inset: 0; display: grid; place-content: center; gap: 12px; justify-items: center;
+  background: #ffffff; color: #5c7186; font-family: var(--mono); font-size: 13px;
+  transition: opacity .4s ease; text-align: center; padding: 20px;
+}
+.iframe-loading.hide { opacity: 0; pointer-events: none; }
+.iframe-loading .spin {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 3px solid #dbe4ec; border-top-color: var(--waiter);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .iframe-loading .spin { animation: none; } }
+
+.demo-stats {
+  margin-top: 18px; display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px;
+  border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--border);
+}
+@media (max-width: 860px) { .demo-stats { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 460px) { .demo-stats { grid-template-columns: repeat(2, 1fr); } }
+.stat { background: var(--panel); padding: 14px 15px; }
+.stat .n { font-family: var(--mono); font-weight: 600; font-size: 19px; color: var(--ink); }
+.stat .n .u { font-size: 12px; color: var(--muted); font-weight: 500; }
+.stat .l { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.stat.hot .n { color: var(--root); }
+.demo-caption { margin-top: 14px; font-size: 13.5px; color: var(--muted); font-family: var(--mono); }
+.demo-caption b { color: var(--ink-2); font-weight: 500; }
+
+/* ---------- How it works ---------- */
+.how { border-top: 1px solid var(--border); background: var(--panel); }
+.pipe { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; }
+.stage {
+  flex: 1 1 150px; min-width: 140px;
+  border: 1px solid var(--border); border-radius: 11px; background: var(--panel-2);
+  padding: 14px 15px; position: relative;
+}
+.stage .idx { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.stage .t { font-family: var(--mono); font-size: 13px; color: var(--ink); font-weight: 600; margin-top: 6px; word-break: break-word; }
+.stage .d { font-size: 12px; color: var(--muted); margin-top: 5px; }
+.stage.db { border-color: color-mix(in srgb, var(--waiter) 34%, var(--border)); }
+.stage.client { border-color: color-mix(in srgb, var(--holds) 34%, var(--border)); }
+.stage .env { position: absolute; top: 10px; right: 12px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; }
+.stage.db .env { color: var(--waiter); }
+.stage.client .env { color: var(--holds); }
+.pipe .arrow { align-self: center; color: var(--faint); flex: none; }
+@media (max-width: 760px) { .pipe { flex-direction: column; } .pipe .arrow { transform: rotate(90deg); } }
+.how-note {
+  margin-top: 22px; font-size: 14.5px; color: var(--ink-2);
+  padding: 15px 18px; border-left: 3px solid var(--waiter); background: var(--inset); border-radius: 0 10px 10px 0;
+}
+.how-note b { color: var(--ink); }
+
+/* ---------- Requirements ---------- */
+.req-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+@media (max-width: 720px) { .req-grid { grid-template-columns: 1fr; } }
+.req {
+  display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start;
+  border: 1px solid var(--border); border-radius: 12px; padding: 18px 18px; background: var(--panel);
+}
+.req .rn { font-family: var(--mono); font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; white-space: nowrap; }
+.req h3 { font-size: 15px; margin-bottom: 5px; }
+.req p { font-size: 13.5px; color: var(--muted); margin: 0; }
+.req p code { font-family: var(--mono); color: var(--ink-2); }
+
+/* ---------- Quick start ---------- */
+.start { border-top: 1px solid var(--border); background: var(--panel); }
+.codeblock {
+  border: 1px solid var(--border-2); border-radius: 14px; overflow: hidden; background: var(--inset);
+  box-shadow: var(--shadow);
+}
+.code-head {
+  display: flex; align-items: center; gap: 10px; padding: 11px 15px;
+  border-bottom: 1px solid var(--border); background: var(--panel-2);
+  font-family: var(--mono); font-size: 12px; color: var(--muted);
+}
+.code-head .fname { color: var(--ink-2); }
+.copybtn {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--mono); font-size: 12px; cursor: pointer;
+  border: 1px solid var(--border-2); border-radius: 8px; padding: 6px 11px;
+  background: var(--panel); color: var(--ink);
+}
+.copybtn:hover { border-color: var(--waiter); }
+.copybtn.done { color: var(--waiter); border-color: var(--waiter); }
+.copybtn svg { width: 14px; height: 14px; }
+pre.code {
+  margin: 0; padding: 18px 18px; overflow-x: auto;
+  font-family: var(--mono); font-size: 13px; line-height: 1.85; color: var(--ink);
+}
+pre.code .cmt { color: var(--faint); }
+pre.code .prompt { color: var(--waiter); user-select: none; }
+pre.code .str { color: var(--holds); }
+.start-note { margin-top: 16px; font-size: 13.5px; color: var(--muted); }
+
+/* ---------- Footer ---------- */
+footer.foot { border-top: 1px solid var(--border); background: var(--bg-2); }
+.foot-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 30px; padding: 46px 0 30px; }
+@media (max-width: 720px) { .foot-grid { grid-template-columns: 1fr; gap: 24px; } }
+.foot .brand { font-size: 16px; }
+.foot .blurb { margin-top: 12px; font-size: 13.5px; color: var(--muted); max-width: 42ch; }
+.foot h4 { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); margin: 0 0 12px; font-weight: 500; }
+.foot ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+.foot a.flink { color: var(--ink-2); text-decoration: none; font-size: 14px; }
+.foot a.flink:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.foot-base {
+  border-top: 1px solid var(--border); padding: 18px 0 40px;
+  display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; justify-content: space-between;
+  font-family: var(--mono); font-size: 12px; color: var(--muted);
+}
+.foot-base a { color: var(--muted); text-decoration: none; }
+.foot-base a:hover { color: var(--ink); }
+
+/* on-load entrance — CSS-only, resting state is visible (robust if animation is skipped) */
+.console { animation: consoleIn .65s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes consoleIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .console { animation: none; } }
+</style>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- ===================== NAV ===================== -->
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="ASH Blocking Sessions Timeline — home">
+      <span class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 26 26" width="26" height="26" fill="none">
+          <circle cx="5" cy="6" r="3" fill="var(--waiter)"/>
+          <circle cx="5" cy="20" r="3" fill="var(--waiter)"/>
+          <circle cx="13.5" cy="13" r="3" fill="var(--holds)"/>
+          <rect x="20" y="10" width="6" height="6" transform="rotate(45 23 13)" fill="var(--root)"/>
+          <path d="M7.6 6.8 L11 12 M7.6 19.2 L11 14 M16.4 13 L20 13" stroke="var(--border-2)" stroke-width="1.4"/>
+        </svg>
+      </span>
+      <b>ASH&nbsp;Blocking&nbsp;Sessions</b><span>&nbsp;Timeline</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a class="navlink" href="#problem">Problem</a>
+      <a class="navlink" href="#views">Three&nbsp;views</a>
+      <a class="navlink" href="#safety">Safety</a>
+      <a class="navlink" href="#how">How&nbsp;it&nbsp;works</a>
+      <a class="navlink" href="#demo">Demo</a>
+      <a class="gh-pill" href="https://github.com/davidbudac/ash_blocking_sessions" target="_blank" rel="noopener">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span class="lbl"><span class="star">★</span> Star</span>
+      </a>
+      <button class="iconbtn" id="theme-toggle" type="button" aria-label="Switch color theme" title="Switch color theme">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21 12.8A8.5 8.5 0 0 1 11.2 3a1 1 0 0 0-1.3-1.2A9.5 9.5 0 1 0 22.2 14a1 1 0 0 0-1.2-1.2Z"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<span id="top"></span>
+
+<!-- ===================== HERO ===================== -->
+<section class="band hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow">ASH · DBA_HIST_ACTIVE_SESS_HISTORY</p>
+      <h1><span class="q">Who blocked whom, for how long,</span> and why.</h1>
+      <p class="lead">
+        When an app freezes on database locks, native <code>V$</code> views only show
+        <em>now</em>. This tool reads the blocking samples Oracle already kept in
+        <code>DBA_HIST_ACTIVE_SESS_HISTORY</code> and rebuilds the whole incident into
+        one self-contained HTML report — a per-session timeline and a click-through
+        blocking tree for any 10-second ASH sample.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#demo"><span class="dia" aria-hidden="true">◆</span> View live demo</a>
+        <a class="btn btn-ghost" href="https://github.com/davidbudac/ash_blocking_sessions" target="_blank" rel="noopener"><span class="star" aria-hidden="true">★</span> View on GitHub</a>
+      </div>
+      <p class="trust">
+        <span><span class="dot r"></span> <b>Read-only</b> against the DB</span>
+        <span><span class="dot"></span> <b>Zero</b> database footprint</span>
+        <span><span class="dot a"></span> <b>One</b> offline HTML file</span>
+      </p>
+    </div>
+
+    <!-- SIGNATURE: the live blocking chain -->
+    <div class="console" role="img"
+         aria-label="A blocking chain at one 10-second ASH sample: sessions 1:452, 1:461 and 1:475 wait on 'enq: TX - row lock contention'. Session 1:118 both holds a lock and waits. The root blocker, session 1:287 running module ETL_LOAD, sits idle while holding a row lock.">
+      <div class="console-bar">
+        <span class="live"><span class="beat" aria-hidden="true"></span> LIVE CHAIN</span>
+        <span class="sample">sample 14:32:07 · +10s heartbeat</span>
+      </div>
+      <div class="console-body">
+        <svg class="chainsvg" viewBox="0 0 640 372" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="var(--border-2)"/>
+            </marker>
+            <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="var(--root)"/>
+            </marker>
+          </defs>
+
+          <!-- base edges (waiter -> ... -> root) -->
+          <!-- w1 (1:452) -> mid (1:118) -->
+          <path id="e1" d="M150 64 C 250 64, 250 120, 330 120" fill="none" stroke="var(--border-2)" stroke-width="2"/>
+          <!-- mid (1:118) -> root (1:287) -->
+          <path id="e2" d="M452 120 C 500 120, 500 176, 528 186" fill="none" stroke="var(--root)" stroke-width="2.3" marker-end="url(#arrowR)"/>
+          <!-- w2 (1:461) -> root -->
+          <path id="e3" d="M150 196 C 320 196, 360 188, 512 190" fill="none" stroke="var(--border-2)" stroke-width="2" marker-end="url(#arrow)"/>
+          <!-- w3 (1:475) -> root -->
+          <path id="e4" d="M150 320 C 340 320, 420 240, 520 208" fill="none" stroke="var(--border-2)" stroke-width="2" marker-end="url(#arrow)"/>
+          <!-- arrow into mid -->
+          <path d="M300 120 L330 120" fill="none" stroke="var(--holds)" stroke-width="2.3" marker-end="url(#arrow)"/>
+
+          <!-- travelling pulses -->
+          <use href="#e1" class="pulse p1" stroke="var(--waiter)" stroke-width="3.4" stroke-linecap="round"/>
+          <use href="#e2" class="pulse p2" stroke="var(--root)" stroke-width="3.4" stroke-linecap="round"/>
+          <use href="#e3" class="pulse p3" stroke="var(--waiter)" stroke-width="3.4" stroke-linecap="round"/>
+          <use href="#e4" class="pulse p4" stroke="var(--waiter)" stroke-width="3.4" stroke-linecap="round"/>
+
+          <!-- edge labels -->
+          <g font-family="var(--mono, monospace)" font-size="10.5" fill="var(--muted)">
+            <text x="196" y="52">enq: TX</text>
+            <text x="300" y="250" text-anchor="middle">enq: TX</text>
+            <text x="316" y="176">enq: TX</text>
+          </g>
+
+          <!-- ============ NODES ============ -->
+          <!-- waiter 1:452 -->
+          <g>
+            <rect x="24" y="42" width="126" height="44" rx="9" fill="var(--waiter-soft)" stroke="var(--waiter)" stroke-width="1.4"/>
+            <circle cx="41" cy="64" r="4.5" fill="var(--waiter)"/>
+            <text x="55" y="61" font-family="var(--mono, monospace)" font-size="14" font-weight="600" fill="var(--ink)">1:452</text>
+            <text x="55" y="76" font-family="var(--mono, monospace)" font-size="9.5" fill="var(--muted)">ORDERS_API · waiting</text>
+          </g>
+          <!-- waiter 1:461 -->
+          <g>
+            <rect x="24" y="174" width="126" height="44" rx="9" fill="var(--waiter-soft)" stroke="var(--waiter)" stroke-width="1.4"/>
+            <circle cx="41" cy="196" r="4.5" fill="var(--waiter)"/>
+            <text x="55" y="193" font-family="var(--mono, monospace)" font-size="14" font-weight="600" fill="var(--ink)">1:461</text>
+            <text x="55" y="208" font-family="var(--mono, monospace)" font-size="9.5" fill="var(--muted)">ORDERS_API · waiting</text>
+          </g>
+          <!-- waiter 1:475 -->
+          <g>
+            <rect x="24" y="298" width="126" height="44" rx="9" fill="var(--waiter-soft)" stroke="var(--waiter)" stroke-width="1.4"/>
+            <circle cx="41" cy="320" r="4.5" fill="var(--waiter)"/>
+            <text x="55" y="317" font-family="var(--mono, monospace)" font-size="14" font-weight="600" fill="var(--ink)">1:475</text>
+            <text x="55" y="332" font-family="var(--mono, monospace)" font-size="9.5" fill="var(--muted)">BILLING · waiting</text>
+          </g>
+          <!-- mid 1:118 holds & waits -->
+          <g>
+            <rect x="326" y="98" width="126" height="44" rx="9" fill="var(--holds-soft)" stroke="var(--holds)" stroke-width="1.6"/>
+            <path d="M343 120 a5 5 0 0 1 0 -0.1" fill="none"/>
+            <circle cx="343" cy="120" r="5" fill="none" stroke="var(--holds)" stroke-width="1.6"/>
+            <path d="M343 115 a5 5 0 0 1 0 10 z" fill="var(--holds)"/>
+            <text x="356" y="117" font-family="var(--mono, monospace)" font-size="14" font-weight="600" fill="var(--ink)">1:118</text>
+            <text x="356" y="132" font-family="var(--mono, monospace)" font-size="9.5" fill="var(--holds)">holds &amp; waits</text>
+          </g>
+          <!-- root 1:287 -->
+          <g style="filter: drop-shadow(0 0 10px var(--glow-root));">
+            <rect x="494" y="160" width="134" height="56" rx="11" fill="var(--root-soft)" stroke="var(--root)" stroke-width="1.8"/>
+            <rect x="508" y="182" width="12" height="12" transform="rotate(45 514 188)" fill="var(--root)"/>
+            <text x="530" y="182" font-family="var(--mono, monospace)" font-size="15" font-weight="700" fill="var(--ink)">1:287</text>
+            <text x="530" y="196" font-family="var(--mono, monospace)" font-size="9.5" fill="var(--root)">ROOT · ETL_LOAD</text>
+            <text x="530" y="208" font-family="var(--mono, monospace)" font-size="9.5" fill="var(--muted)">idle · holds lock</text>
+          </g>
+        </svg>
+
+        <div class="verdict">
+          <span class="vmark" aria-hidden="true">◆</span>
+          <div class="vtxt">
+            <span class="vlabel">Auto-generated verdict</span>
+            <b>1:287</b> (ETL_LOAD) sat <strong>idle while holding a row lock</strong> — a likely
+            uncommitted transaction — blocking three sessions on
+            <span class="mono">enq: TX - row lock contention</span>.
+          </div>
+        </div>
+        <div class="legend" aria-hidden="true">
+          <span><i class="k w"></i> waiter</span>
+          <span><i class="k a"></i> holds &amp; waits</span>
+          <span><i class="k r"></i> root blocker</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== PROBLEM ===================== -->
+<section class="band problem" id="problem">
+  <div class="wrap problem-grid">
+    <div>
+      <p class="eyebrow">The problem</p>
+      <h2>The lock cleared. The question didn't.</h2>
+      <p class="lead" style="margin-top:16px;">
+        By the time you're paged, the blocking is often already over. You need to answer,
+        from history: which session was the <em>root</em> blocker, how many sessions it
+        held up and for how long, and — the decisive part — whether it was running SQL or
+        just sitting on an uncommitted transaction. AWR keeps the samples; reconstructing
+        the chains by hand from <code style="font-family:var(--mono);font-size:.9em;">DBA_HIST_*</code> is the slow part.
+      </p>
+    </div>
+    <div class="now-then">
+      <div class="nt a">
+        <span class="tag">V$ views</span>
+        <div><p><strong>Show only now.</strong> Live blocking views are empty once the incident passes — nothing left to inspect.</p></div>
+      </div>
+      <div class="nt b">
+        <span class="tag">ASH history</span>
+        <div><p><strong>Keeps the evidence</strong> at a ~10-second heartbeat, but the chains are scattered across samples and instances.</p></div>
+      </div>
+      <div class="nt a">
+        <span class="tag">This tool</span>
+        <div><p><strong>Rebuilds the incident</strong> — every chain, every waiter, every root — and lays it out so you read the cause in seconds.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== THREE VIEWS ===================== -->
+<section class="band" id="views">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">The report — three linked views</p>
+      <h2>Verdict, timeline, and the exact chain shape.</h2>
+      <p>Each view answers a different question, and they're wired together: click a cell in the timeline to open that instant's blocking tree; step sample by sample to watch chains form and collapse.</p>
+    </div>
+    <div class="views-grid">
+
+      <!-- Card 1 : Key findings -->
+      <article class="card">
+        <p class="q-eyebrow">Who &amp; how long</p>
+        <h3>Key findings</h3>
+        <p>An auto-generated verdict: the biggest root blocker and the blocked session-time it caused, whether it was idle-holding-a-lock or actively running SQL, peak concurrent waiters, and whether the contention resolved before the window ended.</p>
+        <div class="figure" aria-hidden="true">
+          <div class="vmini">
+            <div class="row1"><span class="dia">◆</span> <span class="who">1:287</span> <span class="mod">ETL_LOAD</span></div>
+            <div class="state">idle while holding a row lock — likely uncommitted</div>
+            <div class="chips">
+              <span class="chip"><b>~20m</b> blocked</span>
+              <span class="chip"><b>3</b> waiters</span>
+              <span class="chip"><b>enq: TX</b></span>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Card 2 : Session timeline -->
+      <article class="card">
+        <p class="q-eyebrow">When &amp; how deep</p>
+        <h3>Session timeline</h3>
+        <p>A Gantt with one lane per session that ever blocked or waited, grouped by chain (root first, members indented). One cell = one ASH sample. Filled = waiting (colored by wait event); outlined = holding a lock; filled + dark stroke = doing both mid-chain.</p>
+        <div class="figure">
+          <svg viewBox="0 0 300 118" role="img" aria-label="Mini Gantt: four session lanes with per-sample cells; the root lane is outlined (holding), waiters are filled.">
+            <g font-family="var(--mono, monospace)" font-size="8" fill="var(--muted)">
+              <text x="0" y="18">◆1:287</text>
+              <text x="4" y="42">1:118</text>
+              <text x="4" y="66">1:452</text>
+              <text x="4" y="90">1:461</text>
+            </g>
+            <!-- grid baseline -->
+            <g>
+              <!-- root: outlined (blocking-only) then filled -->
+              <rect x="52" y="8" width="22" height="14" rx="2.5" fill="none" stroke="var(--root)" stroke-width="1.4"/>
+              <rect x="76" y="8" width="46" height="14" rx="2.5" fill="none" stroke="var(--root)" stroke-width="1.4"/>
+              <rect x="124" y="8" width="70" height="14" rx="2.5" fill="none" stroke="var(--root)" stroke-width="1.4"/>
+              <rect x="196" y="8" width="46" height="14" rx="2.5" fill="none" stroke="var(--root)" stroke-width="1.4"/>
+              <!-- mid: holds & waits (filled + dark stroke) -->
+              <rect x="100" y="32" width="46" height="14" rx="2.5" fill="var(--holds)" stroke="var(--ink)" stroke-width="1"/>
+              <rect x="148" y="32" width="70" height="14" rx="2.5" fill="var(--holds)" stroke="var(--ink)" stroke-width="1"/>
+              <!-- waiter 452 -->
+              <rect x="76" y="56" width="94" height="14" rx="2.5" fill="var(--waiter)"/>
+              <rect x="172" y="56" width="46" height="14" rx="2.5" fill="var(--waiter)"/>
+              <!-- waiter 461 -->
+              <rect x="124" y="80" width="118" height="14" rx="2.5" fill="var(--waiter)"/>
+            </g>
+            <line x1="52" y1="104" x2="290" y2="104" stroke="var(--border)" stroke-width="1"/>
+            <g font-family="var(--mono, monospace)" font-size="7.5" fill="var(--faint)">
+              <text x="52" y="114">14:24</text>
+              <text x="252" y="114">14:38</text>
+            </g>
+          </svg>
+        </div>
+      </article>
+
+      <!-- Card 3 : Blocking tree -->
+      <article class="card">
+        <p class="q-eyebrow">Exactly who, at this instant</p>
+        <h3>Blocking tree</h3>
+        <p>Click any sample to see the chain at that instant — root blockers, fan-in, depth, the wait event on each edge. Step prev / play / next through samples. Per-session detail carries SID,SERIAL#, user, module/action, machine, the contended object, and the SQL text (embedded, so it reads fully offline).</p>
+        <div class="figure">
+          <svg viewBox="0 0 300 118" role="img" aria-label="Mini blocking tree: two waiters and a holds-and-waits node converging on a red root blocker.">
+            <path d="M70 26 C 130 26, 150 52, 205 58" fill="none" stroke="var(--border-2)" stroke-width="1.6"/>
+            <path d="M70 92 C 130 92, 150 66, 205 62" fill="none" stroke="var(--border-2)" stroke-width="1.6"/>
+            <path d="M118 59 L205 59" fill="none" stroke="var(--holds)" stroke-width="1.6"/>
+            <!-- waiter top -->
+            <circle cx="48" cy="26" r="14" fill="var(--waiter-soft)" stroke="var(--waiter)" stroke-width="1.6"/>
+            <text x="48" y="29" text-anchor="middle" font-family="var(--mono, monospace)" font-size="8" font-weight="600" fill="var(--ink)">1:452</text>
+            <!-- waiter bottom -->
+            <circle cx="48" cy="92" r="14" fill="var(--waiter-soft)" stroke="var(--waiter)" stroke-width="1.6"/>
+            <text x="48" y="95" text-anchor="middle" font-family="var(--mono, monospace)" font-size="8" font-weight="600" fill="var(--ink)">1:461</text>
+            <!-- mid -->
+            <circle cx="104" cy="59" r="14" fill="var(--holds-soft)" stroke="var(--holds)" stroke-width="1.6"/>
+            <text x="104" y="62" text-anchor="middle" font-family="var(--mono, monospace)" font-size="8" font-weight="600" fill="var(--ink)">1:118</text>
+            <!-- root -->
+            <rect x="207" y="45" width="30" height="30" rx="4" transform="rotate(45 222 60)" fill="var(--root-soft)" stroke="var(--root)" stroke-width="1.8"/>
+            <text x="222" y="63" text-anchor="middle" font-family="var(--mono, monospace)" font-size="8" font-weight="700" fill="var(--ink)">1:287</text>
+            <text x="222" y="92" text-anchor="middle" font-family="var(--mono, monospace)" font-size="7.5" fill="var(--root)">root</text>
+          </svg>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ===================== SAFETY ===================== -->
+<section class="band safety" id="safety">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow hot">Production stance</p>
+      <h2>Nothing is installed in your database.</h2>
+      <p>The whole tool is one read-only PL/SQL block plus a shell script that runs on <em>your</em> machine. Here is exactly what touches the database — and everything that never does.</p>
+    </div>
+    <div class="safety-grid">
+      <div class="slab runs">
+        <h3><span class="mk">runs on the DB</span> A single read-only query</h3>
+        <ul>
+          <li><svg class="tick" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 8.5 15 16 5.5"/></svg><span><b>SELECTs only</b> against <span class="m">DBA_HIST_*</span>, <span class="m">CDB_USERS</span>, <span class="m">CDB_OBJECTS</span>, <span class="m">V$DATABASE</span>.</span></li>
+          <li><svg class="tick" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 8.5 15 16 5.5"/></svg><span>Plus session-scoped <span class="m">ALTER SESSION</span> for NLS formats — nothing that outlives your session.</span></li>
+          <li><svg class="tick" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 8.5 15 16 5.5"/></svg><span>Reads <b>every container</b> in the CDB; the two JSON payloads are printed to <span class="m">stdout</span>.</span></li>
+          <li><svg class="tick" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5 8.5 15 16 5.5"/></svg><span>Works unchanged against a <b>remote</b> database over EZConnect / TNS.</span></li>
+        </ul>
+      </div>
+      <div class="slab never">
+        <h3><span class="mk">never happens</span> No footprint, ever</h3>
+        <ul>
+          <li><svg class="cross" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 5 15 15M15 5 5 15"/></svg><span>No <b>tables, views, or directory objects</b> — no database objects of any kind.</span></li>
+          <li><svg class="cross" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 5 15 15M15 5 5 15"/></svg><span>No <b>DDL and no DML</b> — the tool cannot modify anything.</span></li>
+          <li><svg class="cross" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 5 15 15M15 5 5 15"/></svg><span>No <b>agent, app server, or scheduled job</b> left running.</span></li>
+          <li><svg class="cross" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 5 15 15M15 5 5 15"/></svg><span>No <b>server-side files</b> written — the HTML is assembled on your machine.</span></li>
+        </ul>
+      </div>
+    </div>
+    <div class="priv">
+      <span class="label">Least privilege</span>
+      <span>A common user with</span>
+      <code>CREATE SESSION</code><span class="plus">+</span><code>SELECT_CATALOG_ROLE</code>
+      <span class="plus">— or connect as</span><code>SYSDBA</code><span class="plus">. Nothing else.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== DEMO ===================== -->
+<section class="band demo" id="demo">
+  <div class="wrap">
+    <div class="sec-head">
+      <div>
+        <p class="eyebrow">See it on real data</p>
+        <h2>A live interactive report.</h2>
+      </div>
+      <a class="btn btn-ghost" href="./demo.html" target="_blank" rel="noopener">Open the full report ↗</a>
+    </div>
+
+    <div class="browser">
+      <div class="browser-bar">
+        <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="url"><b>file://</b>&nbsp;reports/ash_blocking_&lt;ts&gt;.html&nbsp;&nbsp;·&nbsp;&nbsp;264&nbsp;KB&nbsp;·&nbsp;self-contained, offline</span>
+        <a class="open" href="./demo.html" target="_blank" rel="noopener">Open full report <span class="t">↗</span></a>
+      </div>
+      <div class="viewport">
+        <iframe title="ASH Blocking Sessions Timeline — live demo report" src="./demo.html" loading="lazy"></iframe>
+        <div class="iframe-loading" id="iframe-loading">
+          <span class="spin" aria-hidden="true"></span>
+          <span>Loading the interactive report…<br>264&nbsp;KB, no network required</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-stats" role="list" aria-label="Summary from the bundled demo incident">
+      <div class="stat hot" role="listitem"><div class="n">421</div><div class="l">blocked samples</div></div>
+      <div class="stat" role="listitem"><div class="n">~1h10m</div><div class="l">blocked session-time</div></div>
+      <div class="stat" role="listitem"><div class="n">17</div><div class="l">waiting sessions</div></div>
+      <div class="stat" role="listitem"><div class="n">9</div><div class="l">blocking sessions</div></div>
+      <div class="stat" role="listitem"><div class="n">8</div><div class="l">wait chains</div></div>
+      <div class="stat" role="listitem"><div class="n">3</div><div class="l">deepest chain</div></div>
+      <div class="stat hot" role="listitem"><div class="n">16</div><div class="l">peak concurrent</div></div>
+    </div>
+    <p class="demo-caption">
+      <b>From this 7-minute window:</b> session 1:287 (ETL_LOAD) idle while holding a row lock — an uncommitted
+      transaction — caused ~20 minutes of blocked time across 3 waiters.
+      Events seen: enq: TX / TM / UL contention.
+    </p>
+  </div>
+</section>
+
+<!-- ===================== HOW IT WORKS ===================== -->
+<section class="band how" id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">How it works</p>
+      <h2>SQL in, one HTML file out — assembled on your side.</h2>
+      <p>No round trip through a server. <span class="mono" style="font-size:.92em;">sqlplus</span> prints JSON; a POSIX shell script splices it into a template locally.</p>
+    </div>
+    <div class="pipe">
+      <div class="stage db">
+        <span class="env">on DB</span>
+        <div class="idx">01</div>
+        <div class="t">sqlplus</div>
+        <div class="d">runs <span class="mono">build_report.sql</span> read-only</div>
+      </div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="stage db">
+        <span class="env">on DB</span>
+        <div class="idx">02</div>
+        <div class="t">SELECT DBA_HIST ASH</div>
+        <div class="d">self-joined to enrich each waiter with its blocker; + CDB_USERS / CDB_OBJECTS</div>
+      </div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="stage db">
+        <span class="env">on DB</span>
+        <div class="idx">03</div>
+        <div class="t">JSON to stdout</div>
+        <div class="d">two payloads (meta + data) between marker lines</div>
+      </div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="stage client">
+        <span class="env">on you</span>
+        <div class="idx">04</div>
+        <div class="t">awk splice</div>
+        <div class="d"><span class="mono">run_report.sh</span> merges JSON into <span class="mono">template.html</span></div>
+      </div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="stage client">
+        <span class="env">on you</span>
+        <div class="idx">05</div>
+        <div class="t">reports/*.html</div>
+        <div class="d">one self-contained file, charts via ECharts</div>
+      </div>
+    </div>
+    <p class="how-note">
+      <b>Nothing is written on the database server.</b> Because the report is assembled client-side from
+      query output, the machine running the scripts and the database can be entirely different — the tool
+      works the same against a remote DB, and the report always lands in your local <span class="mono">reports/</span>.
+    </p>
+  </div>
+</section>
+
+<!-- ===================== REQUIREMENTS ===================== -->
+<section class="band" id="requirements">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Requirements — stated honestly</p>
+      <h2>What you need before you run it.</h2>
+    </div>
+    <div class="req-grid">
+      <div class="req">
+        <span class="rn">01</span>
+        <div><h3>Oracle 12.2+ with Diagnostics Pack</h3><p>The report reads <code>DBA_HIST_*</code>, which is licensed under the Diagnostics Pack.</p></div>
+      </div>
+      <div class="req">
+        <span class="rn">02</span>
+        <div><h3>sqlplus on PATH</h3><p>Set the Oracle environment first — e.g. <code>. oraenv</code>. No other client tooling.</p></div>
+      </div>
+      <div class="req">
+        <span class="rn">03</span>
+        <div><h3>A window inside AWR retention</h3><p>The incident window must still be in AWR history (default retention ≈ 8 days).</p></div>
+      </div>
+      <div class="req">
+        <span class="rn">04</span>
+        <div><h3>A POSIX shell</h3><p>The scripts are plain <code>sh</code> — they run on AIX ksh, ksh93, and bash unchanged.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== QUICK START ===================== -->
+<section class="band start" id="start">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Quick start</p>
+      <h2>Clone, point it at a window, open the report.</h2>
+    </div>
+    <div class="codeblock">
+      <div class="code-head">
+        <span class="fname">~/ash_blocking_sessions</span>
+        <button class="copybtn" id="copybtn" type="button" aria-label="Copy quick-start commands to clipboard">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="7" y="7" width="10" height="11" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg>
+          <span class="lbl">Copy</span>
+        </button>
+      </div>
+<pre class="code" id="code"><span class="prompt">$ </span>git clone https://github.com/davidbudac/ash_blocking_sessions.git
+<span class="prompt">$ </span>cd ash_blocking_sessions
+
+<span class="cmt"># last 2h, all containers, / as sysdba</span>
+<span class="prompt">$ </span>./run_report.sh
+
+<span class="cmt"># a specific incident window</span>
+<span class="prompt">$ </span>./run_report.sh <span class="str">"/ as sysdba"</span> 2026-07-01T13:30:00 2026-07-01T15:30:00
+
+<span class="cmt"># open the newest report</span>
+<span class="prompt">$ </span>open <span class="str">"$(ls -1t reports/*.html | head -n1)"</span></pre>
+    </div>
+    <p class="start-note">
+      Times are ISO <span class="mono">YYYY-MM-DDTHH24:MI:SS</span> (uppercase <span class="mono">T</span>, no spaces).
+      Arg&nbsp;1 is the sqlplus connect string; a named user must be a <b>common</b> user in <span class="mono">CDB$ROOT</span>.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<!-- ===================== FOOTER ===================== -->
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <a class="brand" href="#top">
+          <span class="glyph" aria-hidden="true">
+            <svg viewBox="0 0 26 26" width="26" height="26" fill="none">
+              <circle cx="5" cy="6" r="3" fill="var(--waiter)"/>
+              <circle cx="5" cy="20" r="3" fill="var(--waiter)"/>
+              <circle cx="13.5" cy="13" r="3" fill="var(--holds)"/>
+              <rect x="20" y="10" width="6" height="6" transform="rotate(45 23 13)" fill="var(--root)"/>
+              <path d="M7.6 6.8 L11 12 M7.6 19.2 L11 14 M16.4 13 L20 13" stroke="var(--border-2)" stroke-width="1.4"/>
+            </svg>
+          </span>
+          <b>ASH&nbsp;Blocking&nbsp;Sessions</b>
+        </a>
+        <p class="blurb">Turn Oracle ASH blocking history into one self-contained, interactive HTML report. Open source, by David Budac.</p>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a class="flink" href="https://github.com/davidbudac/ash_blocking_sessions" target="_blank" rel="noopener">GitHub repository ↗</a></li>
+          <li><a class="flink" href="./architecture.html">How the pipeline works</a></li>
+          <li><a class="flink" href="https://github.com/davidbudac/ash_blocking_sessions#readme" target="_blank" rel="noopener">README ↗</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Try it</h4>
+        <ul>
+          <li><a class="flink" href="./demo.html" target="_blank" rel="noopener">Live demo report ↗</a></li>
+          <li><a class="flink" href="#start">Quick start</a></li>
+          <li><a class="flink" href="#safety">Safety &amp; privileges</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-base">
+      <span>Open source · maintained by David&nbsp;Budac</span>
+      <span><a href="https://github.com/davidbudac/ash_blocking_sessions" target="_blank" rel="noopener">github.com/davidbudac/ash_blocking_sessions</a></span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------- Theme toggle ---------- */
+  var root = document.documentElement;
+  var toggle = document.getElementById('theme-toggle');
+
+  function effectiveTheme() {
+    var set = root.getAttribute('data-theme');
+    if (set === 'light' || set === 'dark') return set;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  function syncLabel() {
+    var t = effectiveTheme();
+    toggle.setAttribute('aria-label', t === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+    toggle.setAttribute('title', t === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+  }
+  toggle.addEventListener('click', function () {
+    var next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('ash-theme', next); } catch (e) {}
+    syncLabel();
+  });
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    (mq.addEventListener ? mq.addEventListener.bind(mq, 'change') : mq.addListener.bind(mq))(function () {
+      if (!root.getAttribute('data-theme')) syncLabel();
+    });
+  }
+  syncLabel();
+
+  /* ---------- Copy quick-start ---------- */
+  var copyBtn = document.getElementById('copybtn');
+  var codeEl = document.getElementById('code');
+  copyBtn.addEventListener('click', function () {
+    var text = codeEl.innerText.replace(/^\$ /gm, '').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+    var done = function () {
+      copyBtn.classList.add('done');
+      copyBtn.querySelector('.lbl').textContent = 'Copied';
+      setTimeout(function () {
+        copyBtn.classList.remove('done');
+        copyBtn.querySelector('.lbl').textContent = 'Copy';
+      }, 1800);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallback(text, done); });
+    } else { fallback(text, done); }
+  });
+  function fallback(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', '');
+    ta.style.position = 'absolute'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+
+  /* ---------- iframe loading state ---------- */
+  var loader = document.getElementById('iframe-loading');
+  var frame = document.querySelector('.viewport iframe');
+  function hideLoader() { if (loader) loader.classList.add('hide'); }
+  if (frame) {
+    frame.addEventListener('load', hideLoader);
+    // safety net if load fired before listener / cached
+    setTimeout(hideLoader, 4000);
+  }
+})();
+</script>
+</body>
+</html>

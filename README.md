@@ -14,6 +14,10 @@ Everything runs locally where the repo lives — a plain `sqlplus` call, no ssh
 and no rsync. The shell scripts are POSIX `sh`, so they run unchanged under the
 AIX `/bin/sh` (ksh), ksh93, or bash.
 
+**Website & live demo:** <https://davidbudac.github.io/ash_blocking_sessions/> —
+a project overview plus the full interactive report running on sample data, right
+in the browser (no database, no install).
+
 ## What the report shows
 
 - **Key findings** — blocked session-time, the biggest root blocker, whether it
@@ -141,6 +145,7 @@ same report with a rich synthetic dataset inlined.
 | `demo/seed_blocking.sql` | Demo blocking patterns (A–D) |
 | `assets/template.html` | Report template (single file, ECharts) |
 | `reports/ash_blocking_demo.html` | Offline demo with sample data inlined |
+| `docs/index.html` | Project website / landing page (served on GitHub Pages) |
 | `docs/architecture.html` | Visual architecture overview (open in a browser) |
 
 Contributor documentation — architecture, template internals, and the testing
