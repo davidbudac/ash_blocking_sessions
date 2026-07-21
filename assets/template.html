@@ -123,7 +123,17 @@
     <div class="findings" id="findings"></div>
   </section>
 
-  <!-- ② The timeline: every session that blocked or was blocked, one lane each -->
+  <!-- ② Timeline overview: OEM Top-Activity-style stacked minimap + zoom control -->
+  <div class="group-label">Timeline overview — blocked sessions by wait class</div>
+  <section>
+    <h2>Activity overview — drag the shaded window to zoom the timeline, click to focus a sample</h2>
+    <div id="chart-overview" style="height: 104px"></div>
+    <div class="footnote">Stacked area = distinct blocked sessions at each ASH sample, colored by wait class (same OEM palette as the timeline).
+      <b>Drag the shaded window</b> (or its handles) along the bottom to zoom the session timeline below; <b>click anywhere</b> on the strip to focus that sample across all chains.
+      The <b>peak</b> marker flags the busiest instant; the right edge is flagged <b>ongoing</b> if blocking was still active at window end, else <b>resolved</b>.</div>
+  </section>
+
+  <!-- ③ The timeline: every session that blocked or was blocked, one lane each -->
   <div class="group-label">Session timeline — all blocking &amp; blocked sessions</div>
   <section>
     <h2>One lane per session — click a sample to open its blocking tree</h2>
@@ -222,7 +232,7 @@ __DATA_JSON__
     document.getElementById('counter').textContent = `${data.length} samples`;
 
     if (data.length === 0) {
-      for (const id of ['chart-lanes','chart-tree']) {
+      for (const id of ['chart-lanes','chart-tree','chart-overview']) {
         const el = document.getElementById(id); if (el) el.innerHTML = '<div class="empty">No blocking samples found in this window.</div>';
       }
       const f = document.getElementById('findings');
@@ -237,7 +247,8 @@ __DATA_JSON__
     // ----- Charts -----
     const lanesChart = echarts.init(document.getElementById('chart-lanes'));
     const treeChart = echarts.init(document.getElementById('chart-tree'));
-    window.addEventListener('resize', () => { lanesChart.resize(); treeChart.resize(); });
+    const overviewChart = echarts.init(document.getElementById('chart-overview'));
+    window.addEventListener('resize', () => { lanesChart.resize(); treeChart.resize(); overviewChart.resize(); });
     // ----- Helpers -----
     // Approximate Oracle Enterprise Manager (Top Activity) wait-class palette.
     // Class names match V$EVENT_NAME.WAIT_CLASS exactly.
@@ -1351,10 +1362,161 @@ __DATA_JSON__
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
+    // ----- Timeline overview (OEM Top-Activity-style minimap + zoom controller) -----
+    // A compact stacked-area strip over the FULL window: per ASH sample, the count of
+    // distinct blocked (waiting) sessions, stacked by wait class. It never zooms itself
+    // — its slider handles define the lanes chart's zoom window, and clicking it focuses
+    // a sample (like the lanes background click). Rendered once per renderAll; the #topN
+    // and #colorBy controls don't change what it shows (it's always by wait class).
+    let overviewWired = false, ovSyncing = false;
+    function renderOverview() {
+      const winStart = allTs[0] - SAMPLE_MS / 2;
+      const winEnd   = allTs[allTs.length - 1] + SAMPLE_MS / 2;
+
+      // Assign each blocked session at each sample to a single dominant wait class,
+      // so the stacked total at a sample == distinct blocked sessions there (matches
+      // the peak / KPI counts). perT: tms -> Map(waiterKey -> Map(wc -> rowCount)).
+      const perT = new Map();
+      for (const d of data) {
+        if (!perT.has(d._tms)) perT.set(d._tms, new Map());
+        const wm = perT.get(d._tms);
+        const wk = waiterKey(d);
+        if (!wm.has(wk)) wm.set(wk, new Map());
+        const cc = wm.get(wk);
+        const wc = d.wc || 'Other';
+        cc.set(wc, (cc.get(wc) || 0) + 1);
+      }
+      const wcSet = new Set();
+      const counts = new Map();  // tms -> Map(wc -> distinct-waiter count)
+      for (const [t, wm] of perT) {
+        const cm = new Map();
+        for (const [, cc] of wm) {
+          const wc = [...cc.entries()].sort((a, b) => b[1] - a[1])[0][0];
+          wcSet.add(wc);
+          cm.set(wc, (cm.get(wc) || 0) + 1);
+        }
+        counts.set(t, cm);
+      }
+      const totalAt = t => (counts.get(t) ? [...counts.get(t).values()].reduce((a, b) => a + b, 0) : 0);
+      const wclasses = [...wcSet].sort();
+
+      const series = wclasses.map(wc => ({
+        name: wc, type: 'line', stack: 'blocked', xAxisIndex: 0, yAxisIndex: 0,
+        showSymbol: false, symbol: 'none', lineStyle: { width: 0 },
+        areaStyle: { color: OEM_WAIT_CLASS[wc] || OEM_WAIT_CLASS['Other'], opacity: 0.9 },
+        itemStyle: { color: OEM_WAIT_CLASS[wc] || OEM_WAIT_CLASS['Other'] },
+        data: allTs.map(t => [t, (counts.get(t) && counts.get(t).get(wc)) || 0])
+      }));
+
+      // Peak marker + ongoing/resolved marker on a dedicated transparent line series,
+      // so annotations never perturb the stacks. Ongoing check mirrors renderSummary().
+      const peakN = totalAt(peakT);
+      const lastT = allTs[allTs.length - 1];
+      const endMs = meta.endTime ? new Date(meta.endTime).getTime() : NaN;
+      const ongoing = isFinite(endMs) && (endMs - lastT) <= 2 * SAMPLE_MS;
+      const markData = [{
+        xAxis: peakT,
+        label: { show: true, formatter: `peak ${peakN}`, position: 'insideEndTop', fontSize: 9, color: '#2c3e50' },
+        lineStyle: { color: '#2c3e50', width: 1, type: 'dashed' }
+      }, ongoing ? {
+        xAxis: lastT,
+        label: { show: true, formatter: 'ongoing', position: 'insideEndTop', fontSize: 9, color: '#c0392b' },
+        lineStyle: { color: '#c0392b', width: 1.5, type: 'solid' }
+      } : {
+        xAxis: lastT,
+        label: { show: true, formatter: 'resolved', position: 'insideEndTop', fontSize: 9, color: '#196f3d' },
+        lineStyle: { color: '#27ae60', width: 1, type: 'dotted' }
+      }];
+      series.push({
+        name: '_markers', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: [], silent: true,
+        markLine: { silent: true, symbol: 'none', animation: false, data: markData }
+      });
+      // Shadow series on the secondary (hidden) axis feeds the slider; the slider zooms
+      // axis 1 only, so the visible area on axis 0 stays full-window (never zooms itself).
+      series.push({
+        name: '_shadow', type: 'line', xAxisIndex: 1, yAxisIndex: 1,
+        showSymbol: false, symbol: 'none', silent: true,
+        lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 },
+        data: allTs.map(t => [t, totalAt(t)])
+      });
+
+      overviewChart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          formatter: params => {
+            if (!params || !params.length) return '';
+            const t = params[0].axisValue;
+            let total = 0; const rows = [];
+            for (const p of params) {
+              if (p.seriesName === '_markers' || p.seriesName === '_shadow') continue;
+              const v = Array.isArray(p.value) ? p.value[1] : p.value;
+              if (v > 0) { total += v; rows.push(`${p.marker}${escapeHtml(p.seriesName)}: <b>${v}</b>`); }
+            }
+            return `<b>${fmtTs(typeof t === 'number' ? t : new Date(t).getTime())}</b><br>` +
+                   `${total} blocked session(s)` + (rows.length ? `<br>${rows.join('<br>')}` : '');
+          }
+        },
+        grid: { left: 150, right: 20, top: 12, bottom: 30, containLabel: true },
+        xAxis: [
+          { type: 'time', min: winStart, max: winEnd, boundaryGap: false, axisLabel: { fontSize: 10, hideOverlap: true } },
+          { type: 'time', min: winStart, max: winEnd, boundaryGap: false, show: false }
+        ],
+        yAxis: [
+          { type: 'value', min: 0, splitLine: { show: false }, axisTick: { show: false },
+            axisLine: { show: false }, axisLabel: { fontSize: 9, color: '#8a97a5' } },
+          { type: 'value', min: 0, show: false }
+        ],
+        dataZoom: [
+          { type: 'slider', xAxisIndex: 1, filterMode: 'none', realtime: true,
+            bottom: 2, height: 16, start: 0, end: 100,
+            borderColor: 'transparent', fillerColor: 'rgba(41,128,185,0.18)',
+            dataBackground: { lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 } },
+            selectedDataBackground: { lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 } },
+            handleStyle: { color: '#2980b9' }, moveHandleSize: 5 }
+        ],
+        series
+      }, true);
+
+      if (!overviewWired) {
+        overviewWired = true;
+        // Minimap slider drag → zoom the lanes chart to the same window. Percent maps
+        // 1:1 because both x-axes span the full window. Guarded against the sync echo.
+        overviewChart.on('dataZoom', () => {
+          if (ovSyncing) return;
+          const opt = overviewChart.getOption();
+          const dz = opt && opt.dataZoom && opt.dataZoom[0];
+          if (!dz) return;
+          ovSyncing = true;
+          lanesChart.dispatchAction({ type: 'dataZoom', start: dz.start, end: dz.end });
+          ovSyncing = false;
+        });
+        // Lanes zoom (inside/slider) → reflect the window back onto the minimap handles.
+        lanesChart.on('dataZoom', () => {
+          if (ovSyncing) return;
+          const opt = lanesChart.getOption();
+          const zs = (opt && opt.dataZoom) || [];
+          const dz = zs.find(z => z.type === 'inside') || zs[0];
+          if (!dz) return;
+          ovSyncing = true;
+          overviewChart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, start: dz.start, end: dz.end });
+          ovSyncing = false;
+        });
+        // Click anywhere on the strip → focus that ASH sample across all chains
+        // (same behavior as clicking empty plot space in the lanes chart).
+        overviewChart.getZr().on('click', e => {
+          if (!overviewChart.containPixel('grid', [e.offsetX, e.offsetY])) return;
+          const t = overviewChart.convertFromPixel({ xAxisIndex: 0 }, e.offsetX);
+          if (t == null || isNaN(t)) return;
+          applySelection(snapT(t), null);
+        });
+      }
+    }
+
     // ----- Wire up controls -----
     function renderAll() {
       renderSummary();
       renderLanes();
+      renderOverview();
       renderTreePanel();
       updateBanner();
     }
@@ -1365,6 +1527,7 @@ __DATA_JSON__
 
     renderSummary();
     renderLanes();
+    renderOverview();
     applySelection(peakT, null);   // default focus: peak-contention sample, all chains
   })();
   </script>
