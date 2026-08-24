@@ -30,9 +30,19 @@ in the browser (no database, no install).
 - **Blocking tree** — click any sample (or any session's cell) to see the exact
   chain shape at that instant: root blockers, fan-in, chain depth, per-edge wait
   events. Step sample-by-sample to watch chains form and collapse.
-- **Sample detail** — per session: `SID,SERIAL#`, user, module/action, machine,
-  the **contended object**, and the **SQL text** (embedded in the report, so it
-  reads fully offline).
+- **Sample detail** — per session: `SID,SERIAL#`, user, module/action, program,
+  machine, service, client id, session type, the **contended object**, SQL id +
+  operation + exec start + plan hash, top-level SQL, **PL/SQL entry point**,
+  **transaction XID**, decoded enqueue (type / resource / requested mode —
+  e.g. `TX-usn.slot.seq mode X`), current file/block/row, time in wait, plus a
+  short **root-cause hint** per wait. SQL text is embedded in the report, so it
+  reads fully offline.
+- **Do it yourself SQL** — every sample (and the whole window) comes with a
+  copy-paste `SELECT *` set against `DBA_HIST_ACTIVE_SESS_HISTORY`: the
+  depth-indented blocking tree at that instant, all chain sessions, the root
+  blocker's history across the window, everything its transaction (XID) did,
+  the full SQL text, and the exact row the waiter was stuck on (via
+  `DBMS_ROWID.ROWID_CREATE`).
 
 ## Requirements
 

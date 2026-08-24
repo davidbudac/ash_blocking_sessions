@@ -61,6 +61,16 @@
     .ct-meta code { background: #eef1f3; padding: 0 4px; border-radius: 3px; }
     .ct-wc { font-size: 10px; color: #7f8c8d; }
 
+    /* Copy-paste SQL boxes */
+    .sqlbox { margin-top: 8px; border: 1px solid var(--line); border-radius: 5px; background: #f8f9fb; }
+    .sqlbox-head { display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; font-size: 11.5px; color: #555; border-bottom: 1px solid var(--line); }
+    .sqlbox pre { margin: 0; padding: 10px 12px; font-size: 11px; line-height: 1.45; max-height: 420px; overflow: auto; white-space: pre; color: #1f2d3a; }
+    .copy-btn { font-size: 11px; padding: 2px 10px; border: 1px solid #9cc3e0; background: #fff; color: #2c5f86; border-radius: 4px; cursor: pointer; }
+    .copy-btn:hover { background: #f0f7fc; }
+    .ct-hint { margin-top: 3px; font-size: 11px; color: #7d5a00; background: #fff8e1; border-left: 3px solid #f1c40f; padding: 2px 7px; border-radius: 0 4px 4px 0; }
+    .ct-kv { color: #34495e; font-size: 11px; }
+    .ct-kv b { font-weight: 600; color: #2c3e50; }
+
     /* Key-findings hero */
     section.summary { border-left: 4px solid var(--warn); }
     .kpis { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -196,6 +206,195 @@ __DATA_JSON__
       const s = String(t).replace(/\s+/g, ' ').trim();
       const max = len || 60;
       return s.length > max ? s.slice(0, max - 1) + '…' : s;
+    }
+
+    // ----- Root-cause helpers -----
+    // Decode the enqueue parameters ASH stores for 'enq: XX - ...' waits:
+    // P1 = lock name (2 chars) | requested mode, P2/P3 = ID1/ID2 (type-specific).
+    const ENQ_MODE = { 0:'none', 1:'null', 2:'SS (row-S)', 3:'SX (row-X)', 4:'S', 5:'SSX', 6:'X' };
+    function enqInfo(ev, p1, p2, p3) {
+      if (!ev || !/^enq: /.test(ev) || p1 == null) return null;
+      const hi = Math.floor(p1 / 65536), mode = p1 % 65536;
+      const type = String.fromCharCode(Math.floor(hi / 256) & 255, hi & 255);
+      const out = { type, mode, modeTxt: ENQ_MODE[mode] || String(mode) };
+      if (type === 'TX' && p2 != null) {
+        out.res = `TX-${Math.floor(p2 / 65536)}.${p2 % 65536}.${p3 == null ? '?' : p3}`; // usn.slot.seq
+        out.resLbl = 'transaction';
+      } else if (type === 'TM' && p2 != null) { out.res = `object_id ${p2}`; out.resLbl = 'table'; }
+      else if (type === 'UL' && p2 != null) { out.res = `lock id ${p2}`; out.resLbl = 'user lock'; }
+      else if (p2 != null) { out.res = `id1=${p2}${p3 != null ? ', id2=' + p3 : ''}`; }
+      return out;
+    }
+    // Short "what usually causes this" line for the sample detail. Heuristic, not a verdict.
+    function rootCauseHint(s) {
+      const ev = s.ev || '', e = enqInfo(ev, s.p1, s.p2, s.p3);
+      const blockerIdle = !s.bEv && !s.bState;
+      if (e) {
+        if (e.type === 'TX') {
+          if (e.mode === 6) return `Row lock: the blocker holds an uncommitted change to the same row and releases it only on COMMIT/ROLLBACK` +
+                                   (blockerIdle ? ' — the blocker was idle (not sampled) while holding it, i.e. waiting on the application to commit.' : '.');
+          if (e.mode === 4) return 'Share-mode TX wait — not a plain row lock: usually a unique/primary-key insert colliding with an uncommitted row, an ITL slot shortage on the block, or a bitmap-index entry.';
+          return `TX enqueue requested in mode ${e.modeTxt}.`;
+        }
+        if (e.type === 'TM') return 'Table-level (TM) lock: LOCK TABLE / DDL on the table, or DML on a parent/child table whose foreign key is UNINDEXED (the classic cause).';
+        if (e.type === 'UL') return 'Application user lock (DBMS_LOCK): held by application code — look at the blocker\'s module and PL/SQL entry point.';
+        if (e.type === 'HW') return 'High-water-mark enqueue: concurrent segment growth (inserts/LOB writes) — extent allocation is serialized.';
+        if (e.type === 'SQ') return 'Sequence enqueue: contention on NEXTVAL of a NOCACHE / small-cache sequence.';
+        if (e.type === 'ST') return 'Space-transaction enqueue: dictionary-managed tablespace or heavy temp allocation.';
+        if (e.type === 'TT') return 'Tablespace enqueue: tablespace-level DDL/space operations.';
+        return `Enqueue ${e.type} requested in mode ${e.modeTxt}.`;
+      }
+      if (/buffer busy|read by other session|write complete/.test(ev)) return 'Block-level contention: another session is reading or changing the same block (hot block); see current file/block.';
+      if (/library cache|cursor: pin/.test(ev)) return 'Library-cache contention: DDL, recompilation or hard parse of a cursor/object the blocker is holding; check what the blocker is compiling or parsing.';
+      if (/row cache/.test(ev)) return 'Dictionary-cache lock: DDL, sequence (NOCACHE) or space-management activity.';
+      if (/^gc /.test(ev)) return 'Cache-Fusion contention: the block is held or mastered on another RAC instance (see blocking instance).';
+      if (/latch/.test(ev)) return 'Latch contention: short-lived memory-structure serialization; usually a symptom of high concurrency on the same structure.';
+      if (/PX Deq|parallel/i.test(ev)) return 'Parallel-execution wait: the coordinator/slaves are waiting on each other.';
+      return '';
+    }
+    function fmtMicros(us) {
+      if (us == null) return '';
+      const s = us / 1e6;
+      return s < 1 ? `${Math.round(us / 1000)}ms` : s < 60 ? `${s.toFixed(1)}s` : fmtDur(s);
+    }
+    function isoTs(ms) { return fmtTs(ms).replace(' ', 'T'); }
+    function sqlLit(v) { return `'${String(v).replace(/'/g, "''")}'`; }
+
+    // Copy-paste SQL that reproduces a sample from DBA_HIST_ACTIVE_SESS_HISTORY,
+    // so the reader can look at every column, not just what this report shows.
+    function sqlForSample(samples, t) {
+      const ts = sqlLit(isoTs(t)), FMT = `'YYYY-MM-DD"T"HH24:MI:SS'`;
+      const dbid = meta.dbId != null ? meta.dbId : '<dbid>';
+      const snaps = [...new Set(samples.map(s => s.snapId).filter(v => v != null))].sort((a, b) => a - b);
+      const snapPred = snaps.length ? `AND a.snap_id IN (${snaps.join(', ')})` : `-- AND a.snap_id IN (<snap_id>)   -- add for speed on large AWR repositories`;
+      const timePred = `AND a.sample_time >= TO_TIMESTAMP(${ts}, ${FMT}) - INTERVAL '1' SECOND\n   AND a.sample_time <  TO_TIMESTAMP(${ts}, ${FMT}) + INTERVAL '2' SECOND`;
+      const trip = (inst, sid, ser) => `(${inst || 1}, ${sid}, ${ser == null || ser === '' ? 'NULL' : ser})`;
+      const sess = new Map(), blockers = new Map(), xids = new Set(), sqlIds = new Set();
+      for (const s of samples) {
+        sess.set(waiterKey(s), trip(s.inst, s.sid, s.serial));
+        if (s.bSid != null) { sess.set(blockerKey(s), trip(s.bInst, s.bSid, s.bSer)); blockers.set(blockerKey(s), trip(s.bInst, s.bSid, s.bSer)); }
+        if (s.bXid) xids.add(s.bXid);
+        for (const id of [s.sqlId, s.bSqlId, s.topSql, s.bTopSql]) if (id) sqlIds.add(id);
+      }
+      const roots = [...blockers.keys()].filter(k => !samples.some(s => waiterKey(s) === k));
+      const rootTrips = (roots.length ? roots : [...blockers.keys()]).map(k => blockers.get(k));
+      const sessList = [...sess.values()], cap = 300;
+      const sessIn = sessList.slice(0, cap).join(',\n        ');
+      const capNote = sessList.length > cap ? `\n   -- (list truncated to ${cap} of ${sessList.length} sessions)` : '';
+      const win = (meta.beginTime && meta.endTime)
+        ? `AND a.sample_time BETWEEN TO_TIMESTAMP(${sqlLit(meta.beginTime)}, ${FMT})\n                         AND TO_TIMESTAMP(${sqlLit(meta.endTime)}, ${FMT})`
+        : `AND a.sample_time BETWEEN <report begin> AND <report end>`;
+      const parts = [];
+      parts.push(`-- ASH sample ${isoTs(t)} on dbid ${dbid} — run in CDB$ROOT as SYSDBA or any user with SELECT_CATALOG_ROLE.
+-- All queries are plain SELECTs against DBA_HIST_ACTIVE_SESS_HISTORY; they return every column (a.*).
+
+-- 1) The blocking tree at this sample, depth-indented, root blockers first.
+--    A blocker that was idle at this instant has no ASH row of its own, so its
+--    waiters start the tree (their BLOCKING_SESSION column still names it).
+WITH a AS (
+  SELECT * FROM dba_hist_active_sess_history a
+   WHERE a.dbid = ${dbid}
+   ${snapPred}
+   ${timePred}
+)
+SELECT LEVEL AS depth,
+       LPAD(' ', 2 * LEVEL - 2) || a.instance_number || ':' || a.session_id || ',' || a.session_serial# AS chain,
+       a.*
+  FROM a
+ START WITH (a.blocking_session IS NULL
+             AND EXISTS (SELECT 1 FROM a w
+                          WHERE w.blocking_session = a.session_id
+                            AND w.blocking_session_serial# = a.session_serial#
+                            AND NVL(w.blocking_inst_id, w.instance_number) = a.instance_number))
+         OR (a.blocking_session IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM a b
+                              WHERE b.session_id = a.blocking_session
+                                AND b.session_serial# = a.blocking_session_serial#
+                                AND b.instance_number = NVL(a.blocking_inst_id, a.instance_number)))
+CONNECT BY NOCYCLE a.blocking_session = PRIOR a.session_id
+       AND a.blocking_session_serial# = PRIOR a.session_serial#
+       AND NVL(a.blocking_inst_id, a.instance_number) = PRIOR a.instance_number
+ ORDER SIBLINGS BY a.instance_number, a.session_id;
+
+-- 2) Plain SELECT * of every session in the chain(s) shown here at this sample
+--    (waiters and blockers; blockers only appear if they were active).
+SELECT a.*
+  FROM dba_hist_active_sess_history a
+ WHERE a.dbid = ${dbid}
+   ${snapPred}
+   ${timePred}
+   AND (a.instance_number, a.session_id, a.session_serial#) IN (
+        ${sessIn})${capNote}
+ ORDER BY a.blocking_session NULLS FIRST, a.instance_number, a.session_id;`);
+      if (rootTrips.length) parts.push(`
+-- 3) What the root blocker(s) did across the whole report window — scroll back to
+--    the sample where the lock was taken (SQL_ID/XID/SQL_EXEC_START right before the waits begin).
+SELECT a.*
+  FROM dba_hist_active_sess_history a
+ WHERE a.dbid = ${dbid}
+   ${win}
+   AND (a.instance_number, a.session_id, a.session_serial#) IN (
+        ${rootTrips.slice(0, cap).join(',\n        ')})
+ ORDER BY a.instance_number, a.session_id, a.sample_time;`);
+      if (xids.size) parts.push(`
+-- 4) Everything the blocking transaction(s) did (same XID), including the statement
+--    that acquired the lock, even if it ran before the first wait.
+SELECT a.*
+  FROM dba_hist_active_sess_history a
+ WHERE a.dbid = ${dbid}
+   ${win}
+   AND a.xid IN (${[...xids].slice(0, 50).map(x => `HEXTORAW('${x}')`).join(', ')})
+ ORDER BY a.xid, a.sample_time;`);
+      if (sqlIds.size) parts.push(`
+-- 5) Full text of every statement involved (waiters, blockers, top-level calls).
+SELECT t.sql_id, t.sql_text
+  FROM dba_hist_sqltext t
+ WHERE t.dbid = ${dbid}
+   AND t.sql_id IN (${[...sqlIds].slice(0, 100).map(sqlLit).join(', ')});`);
+      const rowWaits = samples.filter(s => s.obj && s.dObj != null && s.curBlock && s.curRow != null && /^enq: TX/.test(s.ev || ''));
+      if (rowWaits.length) {
+        const seen = new Set();
+        const lines = [];
+        for (const s of rowWaits) {
+          const k = `${s.dObj}:${s.curFile}:${s.curBlock}:${s.curRow}`; if (seen.has(k)) continue; seen.add(k);
+          lines.push(`-- waiter ${waiterKey(s)} on ${s.obj}${s.conId != null ? ` (run inside container ${s.conId}: ALTER SESSION SET CONTAINER = <pdb>)` : ''}
+SELECT * FROM ${s.obj} WHERE ROWID = DBMS_ROWID.ROWID_CREATE(1, ${s.dObj}, ${s.curFile}, ${s.curBlock}, ${s.curRow});`);
+          if (lines.length >= 20) break;
+        }
+        parts.push(`
+-- 6) The exact row(s) the waiter(s) were blocked on (CURRENT_FILE#/BLOCK#/ROW# → ROWID).
+--    The row may have changed or moved since; DATA_OBJECT_ID is as of report time.
+${lines.join('\n')}`);
+      }
+      return parts.join('\n');
+    }
+    function sqlForWindow() {
+      const FMT = `'YYYY-MM-DD"T"HH24:MI:SS'`, dbid = meta.dbId != null ? meta.dbId : '<dbid>';
+      return `-- Every blocked ASH sample in this report's window (what the report was built from), all columns.
+SELECT a.*
+  FROM dba_hist_active_sess_history a
+ WHERE a.dbid = ${dbid}
+   AND a.sample_time BETWEEN TO_TIMESTAMP(${sqlLit(meta.beginTime || '<begin>')}, ${FMT})
+                         AND TO_TIMESTAMP(${sqlLit(meta.endTime || '<end>')}, ${FMT})
+   AND a.blocking_session IS NOT NULL
+   AND a.blocking_session_status IN ('VALID', 'NOT IN WAIT', 'GLOBAL')
+ ORDER BY a.sample_time, a.instance_number, a.session_id;`;
+    }
+    function sqlBoxHtml(id, sql, label) {
+      return `<div class="sqlbox"><div class="sqlbox-head"><span>${escapeHtml(label)}</span>` +
+             `<button type="button" class="copy-btn" data-copy="${id}">Copy SQL</button></div>` +
+             `<pre id="${id}">${escapeHtml(sql)}</pre></div>`;
+    }
+    function wireCopyButtons(rootEl) {
+      for (const btn of rootEl.querySelectorAll('button[data-copy]')) {
+        btn.onclick = () => {
+          const pre = document.getElementById(btn.dataset.copy); if (!pre) return;
+          const txt = pre.textContent;
+          const done = () => { btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = 'Copy SQL'; }, 1500); };
+          if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, () => {});
+          else { const r = document.createRange(); r.selectNodeContents(pre); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); try { document.execCommand('copy'); done(); } catch (e) {} }
+        };
+      }
     }
 
     // Parse sample times once (Oracle emits "YYYY-MM-DDTHH24:MI:SS" — interpret as local).
@@ -475,12 +674,18 @@ __DATA_JSON__
         bump(wk, 'module', d.module);
         bump(wk, 'action', d.action);
         bump(wk, 'mach',   d.mach);
+        bump(wk, 'svc',    d.svc);
+        bump(wk, 'client', d.client);
+        bump(wk, 'sessType', d.sessType);
         const bk = blockerKey(d);
         bump(bk, 'user',   d.bUser);
         bump(bk, 'prog',   d.bProg);
         bump(bk, 'module', d.bMod);
         bump(bk, 'action', d.bAct);
         bump(bk, 'mach',   d.bMach);
+        bump(bk, 'svc',    d.bSvc);
+        bump(bk, 'client', d.bClient);
+        bump(bk, 'sessType', d.bSessType);
       }
       const result = new Map();
       for (const [sid, fields] of cache) {
@@ -761,8 +966,20 @@ __DATA_JSON__
             const topObj = [...objCounts.entries()].sort((a,b) => b[1]-a[1])[0];
             const objLine = topObj ? `On object: <b>${escapeHtml(topObj[0])}</b>${objCounts.size > 1 ? ` +${objCounts.size - 1} more` : ''}` : '';
             const id = identityFor(r.sid);
-            const idLines = ['user','prog','module','action','mach']
-              .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+            const idLines = ['user','prog','module','action','mach','svc','client','sessType']
+              .filter(k => id[k] && !(k === 'sessType' && id[k] === 'FOREGROUND'))
+              .map(k => `&nbsp;&nbsp;${k === 'svc' ? 'service' : k === 'sessType' ? 'type' : k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+            const sqlCounts = new Map();
+            for (const s of r.samples) {
+              const sq = waiterKey(s) === r.sid ? s.sqlId : (blockerKey(s) === r.sid ? s.bSqlId : null);
+              if (sq) sqlCounts.set(sq, (sqlCounts.get(sq) || 0) + 1);
+            }
+            const topSql = [...sqlCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+            const sqlLine = topSql ? `SQL: <b>${escapeHtml(topSql[0])}</b>${sqlSnip(topSql[0]) ? ' — ' + escapeHtml(sqlSnip(topSql[0], 70)) : ''}${sqlCounts.size > 1 ? ` +${sqlCounts.size - 1} more` : ''}` : '';
+            const bEvCounts = new Map();
+            for (const s of r.samples) if (blockerKey(s) === r.sid) bEvCounts.set(s.bEv || (s.bState === 'ON CPU' ? 'ON CPU' : '(idle — not sampled)'), (bEvCounts.get(s.bEv || (s.bState === 'ON CPU' ? 'ON CPU' : '(idle — not sampled)')) || 0) + 1);
+            const bEvLines = [...bEvCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
+              .map(([e, n]) => `&nbsp;&nbsp;${escapeHtml(e)}: <b>${n}</b>`).join('<br>');
             const role = r.filled ? (r.both ? 'waiting + blocking' : 'waiting') : 'blocking only (holding a lock)';
             return `<b>SID ${r.sid}</b> · ${role}<br>` +
                    `${fmtTs(r.t0)} → ${fmtTs(r.t1 + SAMPLE_MS)}<br>` +
@@ -770,6 +987,8 @@ __DATA_JSON__
                    (r.w ? `Waiting on:<br>${evLines}` : '') +
                    (r.w && objLine ? `<br>${objLine}` : '') +
                    (waitersBehind.size ? `${r.w ? '<br>' : ''}Blocking ${waitersBehind.size} session(s) here` : '') +
+                   (waitersBehind.size && bEvLines ? `<br>While blocking, this session was:<br>${bEvLines}` : '') +
+                   (sqlLine ? `<br>${sqlLine}` : '') +
                    `<br><span style="color:#888;">click to focus this sample &amp; isolate this chain</span>`;
           }
         },
@@ -1039,11 +1258,31 @@ __DATA_JSON__
               if (!n) return p.name;
               const role = (n.isWaiter && n.isBlocker) ? 'chain middle' : n.isBlocker ? 'root blocker' : 'waiter';
               const id = identityFor(n.id);
-              const idLines = ['user','prog','module','action','mach']
-                .filter(k => id[k]).map(k => `&nbsp;&nbsp;${k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+              const idLines = ['user','prog','module','action','mach','svc','client','sessType']
+                .filter(k => id[k] && !(k === 'sessType' && id[k] === 'FOREGROUND'))
+                .map(k => `&nbsp;&nbsp;${k === 'svc' ? 'service' : k === 'sessType' ? 'type' : k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
+              // What this session is doing at the selected instant: as a waiter its own
+              // row, as a blocker the enrichment fields captured on its waiters' rows.
+              const own = n.samples.find(x => waiterKey(x) === n.id);
+              const asB = n.samples.find(x => blockerKey(x) === n.id) || data.find(x => x._tms === selectedT && blockerKey(x) === n.id);
+              const doing = [];
+              if (own) {
+                doing.push(`Waiting on: <b>${escapeHtml(own.ev || '?')}</b>${own.obj ? ' on <b>' + escapeHtml(own.obj) + '</b>' : ''}${own.tw ? ` (${fmtMicros(own.tw)})` : ''}`);
+                const e = enqInfo(own.ev, own.p1, own.p2, own.p3);
+                if (e) doing.push(`Lock: ${escapeHtml(e.type)}${e.res ? ' ' + escapeHtml(e.res) : ''} mode <b>${escapeHtml(e.modeTxt)}</b>`);
+                if (own.sqlId) doing.push(`SQL: <b>${escapeHtml(own.sqlId)}</b>${own.sqlOp ? ' ' + escapeHtml(own.sqlOp) : ''}${sqlSnip(own.sqlId) ? ' — ' + escapeHtml(sqlSnip(own.sqlId, 70)) : ''}`);
+                if (own.plsql) doing.push(`PL/SQL: <b>${escapeHtml(own.plsql)}</b>`);
+                if (own.xid) doing.push(`XID: ${escapeHtml(own.xid)}`);
+              } else if (asB) {
+                doing.push(asB.bEv ? `Doing: <b>${escapeHtml(asB.bEv)}</b>` : asB.bState === 'ON CPU' ? 'Doing: <b>ON CPU</b>' : 'Doing: <i>idle — holding the lock, not sampled</i>');
+                if (asB.bSqlId) doing.push(`SQL: <b>${escapeHtml(asB.bSqlId)}</b>${asB.bSqlOp ? ' ' + escapeHtml(asB.bSqlOp) : ''}${sqlSnip(asB.bSqlId) ? ' — ' + escapeHtml(sqlSnip(asB.bSqlId, 70)) : ''}`);
+                if (asB.bPlsql) doing.push(`PL/SQL: <b>${escapeHtml(asB.bPlsql)}</b>`);
+                if (asB.bXid) doing.push(`XID: ${escapeHtml(asB.bXid)}`);
+              }
               return `<b>${n.id}</b> · ${role}<br>` +
                      `${n.samples.length} blocked samples here · <b>${p.data._impact}</b> stuck behind it` +
-                     (idLines ? `<br>Identity:<br>${idLines}` : '');
+                     (idLines ? `<br>Identity:<br>${idLines}` : '') +
+                     (doing.length ? `<br>${doing.join('<br>')}` : '');
             }
           }
         },
@@ -1209,6 +1448,25 @@ __DATA_JSON__
           : `was <b>idle while holding the lock</b> (never sampled as active — likely an uncommitted transaction)`;
         lines.push(`<div>While blocking, <b>${top.root}</b> ${doing}; its chain was active ` +
                    `<b>${fmtTs(top.t0)}</b> → <b>${fmtTs(top.t1)}</b> (${fmtDur((top.t1 - top.t0 + SAMPLE_MS) / 1000)}).</div>`);
+        // Root-cause pointers for the top root: dominant enqueue resource/mode of its
+        // waiters, plus whatever the enrichment captured about the blocker itself.
+        const dom = (rows, f) => { const m = new Map(); for (const r of rows) { const v = f(r); if (v) m.set(v, (m.get(v) || 0) + 1); }
+                                   const t = [...m.entries()].sort((a, b) => b[1] - a[1])[0]; return t ? t[0] : undefined; };
+        const under = data.filter(d => blockerKey(d) === top.root);
+        const lockTxt = dom(under, d => { const e = enqInfo(d.ev, d.p1, d.p2, d.p3); return e ? `${e.type} enqueue${e.res ? ' on ' + e.res : ''}, mode ${e.modeTxt}` : ''; });
+        const objTxt = dom(under, d => d.obj);
+        const bits = [];
+        if (lockTxt) bits.push(`waiters requested <code>${escapeHtml(lockTxt)}</code>${objTxt ? ` on <b>${escapeHtml(objTxt)}</b>` : ''}`);
+        const bxid = dom(under, d => d.bXid), bpl = dom(under, d => d.bPlsql), bsvc = dom(under, d => d.bSvc),
+              bcl = dom(under, d => d.bClient), bst = dom(under, d => d.bSessType), bprog = id.prog, bmach = id.mach;
+        const facts = [bst && bst !== 'FOREGROUND' && `<b>${escapeHtml(bst)}</b> session`, bprog && `program <b>${escapeHtml(bprog)}</b>`,
+                       bmach && `on <b>${escapeHtml(bmach)}</b>`, bsvc && `service <b>${escapeHtml(bsvc)}</b>`,
+                       bcl && `client_id <b>${escapeHtml(bcl)}</b>`, bpl && `PL/SQL entry <b>${escapeHtml(bpl)}</b>`,
+                       bxid && `transaction XID <code>${escapeHtml(bxid)}</code>`].filter(Boolean);
+        if (facts.length) bits.push(`the blocker is ${facts.join(', ')}`);
+        const hintRow = under.find(d => rootCauseHint(d));
+        if (bits.length) lines.push(`<div>Root-cause pointers: ${bits.join('; ')}.</div>`);
+        if (hintRow) lines.push(`<div class="ct-hint">${escapeHtml(rootCauseHint(hintRow))}</div>`);
       }
       lines.push(`<div>Peak contention: <b>${peak}</b> session(s) blocked simultaneously` +
                  `${peakT ? ` around <b>${fmtTs(new Date(peakT).getTime())}</b>` : ''}; ` +
@@ -1226,7 +1484,11 @@ __DATA_JSON__
       } else {
         lines.push(`<div>Last blocking sample at <b>${fmtTs(lastT)}</b> — contention cleared before the window ended.</div>`);
       }
-      document.getElementById('findings').innerHTML = lines.join('');
+      lines.push(`<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;color:#555;">SQL to pull the whole window yourself (SELECT * from DBA_HIST_ACTIVE_SESS_HISTORY)</summary>` +
+                 sqlBoxHtml('windowSql', sqlForWindow(), 'All blocked samples in the report window') + `</details>`);
+      const fEl = document.getElementById('findings');
+      fEl.innerHTML = lines.join('');
+      wireCopyButtons(fEl);
     }
 
     // ----- Sample detail: blocker → waiter forest + flat table -----
@@ -1251,14 +1513,23 @@ __DATA_JSON__
         const wKey = `${s.inst||1}:${s.sid}`;
         const w = getNode(wKey, s.inst, s.sid, s.serial);
         if (!w.asWaiter) w.asWaiter = { ev:s.ev, wc:s.wc, obj:s.obj, sqlId:s.sqlId, user:s.user,
-                                        prog:s.prog, module:s.module, action:s.action, mach:s.mach, conId:s.conId };
+                                        prog:s.prog, module:s.module, action:s.action, mach:s.mach, conId:s.conId,
+                                        sessType:s.sessType, state:s.state, sqlOp:s.sqlOp, sqlExec:s.sqlExec, phv:s.phv,
+                                        topSql:s.topSql, plsql:s.plsql, xid:s.xid, p1:s.p1, p2:s.p2, p3:s.p3,
+                                        p1t:s.p1t, p2t:s.p2t, p3t:s.p3t, curFile:s.curFile, curBlock:s.curBlock, curRow:s.curRow,
+                                        tw:s.tw, client:s.client, svc:s.svc, hang:s.hang, inPlsql:s.inPlsql, inParse:s.inParse,
+                                        _row:s };
         w.waitCount++;
         if (s.bSid != null) {
           const bKey = `${s.bInst||1}:${s.bSid}`;
           const b = getNode(bKey, s.bInst, s.bSid, s.bSer);
           if (!b.asBlocker) b.asBlocker = { user:s.bUser, prog:s.bProg, module:s.bMod, action:s.bAct,
                                             mach:s.bMach, ev:s.bEv, sqlId:s.bSqlId, wc:s.bWc,
-                                            state:s.bState, status:s.bStatus };
+                                            state:s.bState, status:s.bStatus, conId:s.conId,
+                                            sessType:s.bSessType, sqlOp:s.bSqlOp, sqlExec:s.bSqlExec, phv:s.bPhv,
+                                            topSql:s.bTopSql, plsql:s.bPlsql, xid:s.bXid, obj:s.bObj,
+                                            p1:s.bP1, p2:s.bP2, p3:s.bP3, p1t:s.bP1t, p2t:s.bP2t, p3t:s.bP3t,
+                                            client:s.bClient, svc:s.bSvc, inPlsql:s.bInPlsql };
           if (bKey !== wKey) { b.children.add(wKey); w.parents.add(bKey); }
         }
       }
@@ -1267,30 +1538,71 @@ __DATA_JSON__
       const DOT = { root:'#c0392b', mid:'#e67e22', leaf:'#2980b9' };
       const ROLE_LABEL = { root:'root blocker', mid:'blocks & waits', leaf:'waiter' };
 
+      // One line group per session: who (identity), what it waits on / does, session
+      // facts (type, service, client id, program, machine), SQL (id, op, exec start,
+      // plan hash, top-level call, PL/SQL entry), transaction/lock facts (XID, enqueue
+      // resource + mode, current file/block/row), and a root-cause hint.
+      function sqlLine(x) {
+        if (!x.sqlId && !x.topSql && !x.plsql) return '';
+        const bits = [];
+        if (x.sqlId) {
+          let t = `SQL <code>${escapeHtml(x.sqlId)}</code>`;
+          const extra = [x.sqlOp, x.phv && `plan ${x.phv}`, x.sqlExec && `started ${escapeHtml(x.sqlExec.replace('T', ' '))}`].filter(Boolean);
+          if (extra.length) t += ` (${extra.join(', ')})`;
+          if (sqlSnip(x.sqlId)) t += ` — <i>${escapeHtml(sqlSnip(x.sqlId, 110))}</i>`;
+          bits.push(t);
+        }
+        if (x.topSql) bits.push(`top-level <code>${escapeHtml(x.topSql)}</code>${sqlSnip(x.topSql) ? ' — <i>' + escapeHtml(sqlSnip(x.topSql, 70)) + '</i>' : ''}`);
+        if (x.plsql) bits.push(`PL/SQL entry <b>${escapeHtml(x.plsql)}</b>`);
+        else if (x.inPlsql) bits.push('in PL/SQL');
+        if (x.inParse) bits.push('parsing');
+        return bits.join(' · ');
+      }
+      function sessLine(x, extra) {
+        return [x.sessType && x.sessType !== 'FOREGROUND' && `<b>${escapeHtml(x.sessType)}</b>`,
+                x.svc && `service <b>${escapeHtml(x.svc)}</b>`,
+                x.client && `client_id <b>${escapeHtml(x.client)}</b>`,
+                x.prog && escapeHtml(x.prog), x.mach && escapeHtml(x.mach),
+                x.conId != null && `CON ${x.conId}`].concat(extra || []).filter(Boolean).join(' · ');
+      }
+      function lockLine(x, ev) {
+        const e = enqInfo(ev, x.p1, x.p2, x.p3);
+        const bits = [];
+        if (x.xid) bits.push(`XID <code>${escapeHtml(x.xid)}</code>`);
+        if (e) bits.push(`${e.type} enqueue ${e.res ? `on ${escapeHtml(e.res)} ` : ''}mode <b>${escapeHtml(e.modeTxt)}</b>`);
+        else if (x.p1t && x.p1 != null) bits.push([`${escapeHtml(x.p1t)}=${x.p1}`, x.p2t && `${escapeHtml(x.p2t)}=${x.p2}`, x.p3t && `${escapeHtml(x.p3t)}=${x.p3}`].filter(Boolean).join(', '));
+        if (x.curBlock) bits.push(`file ${x.curFile} block ${x.curBlock}${x.curRow != null ? ' row ' + x.curRow : ''}`);
+        if (x.hang) bits.push(`hang info: ${escapeHtml(x.hang)}`);
+        return bits.join(' · ');
+      }
+
       function nodeHtml(key, visited) {
         const n = nodes.get(key); if (!n) return '';
         const role = roleOf(n);
         const sid = `${n.inst}:${n.sid}${(n.serial!=null&&n.serial!=='')?','+n.serial:''}`;
-        let ident, activity, meta = [];
+        let ident, activity, lines = [], hint = '';
+        const kidsTxt = n.children.size ? ` · <span class="ct-meta">blocking ${n.children.size} session${n.children.size>1?'s':''}</span>` : '';
         if (n.asWaiter) {
           const w = n.asWaiter;
           ident = [w.user, w.module ? w.module + (w.action ? '/'+w.action : '') : null].filter(Boolean).map(escapeHtml).join(' · ');
-          activity = `waiting on <b>${escapeHtml(w.ev||'?')}</b>` + (w.obj ? ` on <b>${escapeHtml(w.obj)}</b>` : '') + (w.wc ? ` <span class="ct-wc">${escapeHtml(w.wc)}</span>` : '');
-          if (n.children.size) activity += ` · <span class="ct-meta">blocking ${n.children.size} session${n.children.size>1?'s':''}</span>`;
-          meta = [w.prog && escapeHtml(w.prog), w.mach && escapeHtml(w.mach),
-                  w.sqlId && `SQL <code>${escapeHtml(w.sqlId)}</code>${sqlSnip(w.sqlId) ? ' — <i>' + escapeHtml(sqlSnip(w.sqlId, 90)) + '</i>' : ''}`, w.conId && `CON ${w.conId}`];
+          activity = `waiting on <b>${escapeHtml(w.ev||'?')}</b>` + (w.obj ? ` on <b>${escapeHtml(w.obj)}</b>` : '') + (w.wc ? ` <span class="ct-wc">${escapeHtml(w.wc)}</span>` : '')
+                   + (w.tw ? ` <span class="ct-meta">(${fmtMicros(w.tw)} in this wait)</span>` : '') + kidsTxt;
+          lines = [sessLine(w), sqlLine(w), lockLine(w, w.ev)];
+          hint = rootCauseHint(w._row);
         } else if (n.asBlocker) {
           const b = n.asBlocker;
           ident = [b.user, b.module ? b.module + (b.action ? '/'+b.action : '') : null].filter(Boolean).map(escapeHtml).join(' · ')
                   || '<span class="ct-meta">identity not sampled</span>';
-          activity = b.ev ? `active: <b>${escapeHtml(b.ev)}</b>` + (b.wc ? ` <span class="ct-wc">${escapeHtml(b.wc)}</span>` : '')
-                          : `<i class="ct-meta">holding lock — not sampled as active</i>`;
-          if (n.children.size) activity += ` · <span class="ct-meta">blocking ${n.children.size} session${n.children.size>1?'s':''}</span>`;
-          meta = [b.prog && escapeHtml(b.prog), b.mach && escapeHtml(b.mach),
-                  b.sqlId && `SQL <code>${escapeHtml(b.sqlId)}</code>${sqlSnip(b.sqlId) ? ' — <i>' + escapeHtml(sqlSnip(b.sqlId, 90)) + '</i>' : ''}`, b.status && `status ${escapeHtml(b.status)}`];
+          activity = b.ev ? `active: <b>${escapeHtml(b.ev)}</b>` + (b.obj ? ` on <b>${escapeHtml(b.obj)}</b>` : '') + (b.wc ? ` <span class="ct-wc">${escapeHtml(b.wc)}</span>` : '')
+                   : b.state === 'ON CPU' ? `active: <b>ON CPU</b>${b.obj ? ` on <b>${escapeHtml(b.obj)}</b>` : ''}`
+                   : `<i class="ct-meta">holding the lock while idle — not sampled as active (waiting on the client, e.g. for a COMMIT)</i>`;
+          activity += kidsTxt;
+          lines = [sessLine(b, [b.status && `status ${escapeHtml(b.status)}`]), sqlLine(b), lockLine(b, b.ev)];
+          if (!b.ev && b.state !== 'ON CPU') hint = 'Root blocker idle in the database: the lock is released only when the application commits/rolls back or the session ends. Query 3/4 below shows the statement that took the lock.';
+          else if (b.ev && /^enq: /.test(b.ev)) hint = 'The blocker is itself waiting on a lock — follow the chain upward.';
         } else { ident = ''; activity = ''; }
-        if (n.waitCount > 1) meta.push(`${n.waitCount} samples`);
-        const metaHtml = meta.filter(Boolean).join(' · ');
+        if (n.waitCount > 1) lines.push(`${n.waitCount} samples`);
+        const linesHtml = lines.filter(Boolean).map(l => `<div class="ct-kv">${l}</div>`).join('');
 
         const node = `<div class="ct-node">
             <span class="ct-dot" style="background:${DOT[role]}"></span>
@@ -1298,7 +1610,8 @@ __DATA_JSON__
               <span class="ct-sid">${sid}</span> <span class="ct-role ${role}">${ROLE_LABEL[role]}</span>
               ${ident ? ` <span class="ct-ident">${ident}</span>` : ''}
               <div class="ct-act">${activity}</div>
-              ${metaHtml ? `<div class="ct-meta">${metaHtml}</div>` : ''}
+              ${linesHtml}
+              ${hint ? `<div class="ct-hint">${escapeHtml(hint)}</div>` : ''}
             </div>
           </div>`;
         if (visited.has(key)) return `<li>${node}<ul><li><span class="ct-meta">↻ cycle — already shown above</span></li></ul></li>`;
@@ -1330,8 +1643,20 @@ __DATA_JSON__
           <td>${escapeHtml(s.module||'')}</td>
           <td>${escapeHtml(s.action||'')}</td>
           <td>${escapeHtml(s.mach||'')}</td>
+          <td>${escapeHtml(s.svc||'')}</td>
+          <td>${escapeHtml(s.client||'')}</td>
+          <td>${escapeHtml(s.plsql||'')}</td>
+          <td><code>${escapeHtml(s.xid||'')}</code></td>
+          <td>${(() => { const e = enqInfo(s.ev, s.p1, s.p2, s.p3); return e ? escapeHtml(`${e.type} ${e.res || ''} ${e.modeTxt}`) : (s.p1t ? escapeHtml(`${s.p1t}=${s.p1} ${s.p2t||''}=${s.p2==null?'':s.p2} ${s.p3t||''}=${s.p3==null?'':s.p3}`) : ''); })()}</td>
+          <td>${s.curBlock ? `${s.curFile}/${s.curBlock}${s.curRow!=null?'/'+s.curRow:''}` : ''}</td>
+          <td>${fmtMicros(s.tw)}</td>
           <td>${escapeHtml(s.bEv||'')}${s.bState?'<br><small>'+s.bState+'</small>':''}</td>
           <td><code title="${escapeHtml(sqlSnip(s.bSqlId, 200))}">${s.bSqlId||''}</code></td>
+          <td>${escapeHtml(s.bUser||'')}</td>
+          <td>${escapeHtml(s.bMod||'')}${s.bAct?'/'+escapeHtml(s.bAct):''}</td>
+          <td>${escapeHtml(s.bProg||'')}</td>
+          <td>${escapeHtml(s.bPlsql||'')}</td>
+          <td><code>${escapeHtml(s.bXid||'')}</code></td>
           <td>${s.conId||''}</td>
         </tr>`).join('');
       const truncNote = samples.length > 500 ? `<div class="footnote">Showing first 500 of ${samples.length} samples.</div>` : '';
@@ -1348,13 +1673,19 @@ __DATA_JSON__
               <thead><tr>
                 <th>Time</th><th>Waiter</th><th>Blocker</th><th>Wait event</th><th>Class</th>
                 <th>Object</th><th>SQL_ID</th><th>User</th><th>Program</th><th>Module</th><th>Action</th><th>Machine</th>
-                <th>Blocker doing</th><th>Blocker SQL</th><th>CON</th>
+                <th>Service</th><th>Client ID</th><th>PL/SQL entry</th><th>XID</th><th>Lock (type/resource/mode)</th><th>File/Block/Row</th><th>In wait</th>
+                <th>Blocker doing</th><th>Blocker SQL</th><th>Blocker user</th><th>Blocker module</th><th>Blocker program</th><th>Blocker PL/SQL</th><th>Blocker XID</th><th>CON</th>
               </tr></thead>
               <tbody>${trows}</tbody>
             </table>
           </div>
           ${truncNote}
+        </details>
+        <details style="margin-top:10px;" id="sampleSqlDetails">
+          <summary style="cursor:pointer;font-size:12px;color:#555;">SQL to look at this sample yourself (SELECT * from DBA_HIST_ACTIVE_SESS_HISTORY)</summary>
+          ${sqlBoxHtml('sampleSql', sqlForSample(samples, samples[0]._tms), `Blocking tree, chain sessions, root-blocker history, transaction, SQL text — for the sample at ${fmtTs(samples[0]._tms)}`)}
         </details>`;
+      wireCopyButtons(wrap);
     }
 
     function escapeHtml(s) {

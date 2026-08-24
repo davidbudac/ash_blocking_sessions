@@ -108,7 +108,14 @@ BEGIN
              session_id, session_serial#, blocking_inst_id, blocking_session,
              blocking_session_serial#, blocking_session_status, event, wait_class,
              session_state, sql_id, module, action, program, machine, user_id, con_id,
-             current_obj#
+             current_obj#,
+             -- Root-cause pointers (all plain columns of the view; no extra cost).
+             session_type, sql_opname, sql_exec_start, sql_plan_hash_value,
+             top_level_sql_id, plsql_entry_object_id, plsql_entry_subprogram_id,
+             xid, p1text, p1, p2text, p2, p3text, p3,
+             current_file#, current_block#, current_row#,
+             time_waited, client_id, service_hash, blocking_hangchain_info,
+             in_parse, in_hard_parse, in_sql_execution, in_plsql_execution
         FROM dba_hist_active_sess_history
        WHERE sample_time BETWEEN l_begin AND l_end
     )
@@ -142,7 +149,53 @@ BEGIN
                'bAct'    VALUE b.action,
                'bProg'   VALUE b.program,
                'bMach'   VALUE b.machine,
-               'bUser'   VALUE u_b.username
+               'bUser'   VALUE u_b.username,
+               -- Locators so the report can print a copy-paste SQL that
+               -- reproduces this exact sample from DBA_HIST_ACTIVE_SESS_HISTORY.
+               'snapId'  VALUE w.snap_id,
+               'sampleId' VALUE w.sample_id,
+               -- Waiter root-cause pointers.
+               'sessType' VALUE w.session_type,
+               'state'   VALUE w.session_state,
+               'sqlOp'   VALUE w.sql_opname,
+               'sqlExec' VALUE TO_CHAR(w.sql_exec_start, 'YYYY-MM-DD"T"HH24:MI:SS'),
+               'phv'     VALUE NULLIF(w.sql_plan_hash_value, 0),
+               'topSql'  VALUE CASE WHEN w.top_level_sql_id <> NVL(w.sql_id, '-') THEN w.top_level_sql_id END,
+               'plsql'   VALUE CASE WHEN pw.owner IS NOT NULL THEN
+                                 pw.owner || '.' || pw.object_name ||
+                                 CASE WHEN pw.procedure_name IS NOT NULL THEN '.' || pw.procedure_name END END,
+               'xid'     VALUE RAWTOHEX(w.xid),
+               'p1t'     VALUE w.p1text, 'p1' VALUE w.p1,
+               'p2t'     VALUE w.p2text, 'p2' VALUE w.p2,
+               'p3t'     VALUE w.p3text, 'p3' VALUE w.p3,
+               'dObj'    VALUE ow.data_object_id,
+               'curFile' VALUE NULLIF(w.current_file#, 0),
+               'curBlock' VALUE NULLIF(w.current_block#, 0),
+               'curRow'  VALUE CASE WHEN w.current_block# > 0 THEN w.current_row# END,
+               'tw'      VALUE NULLIF(w.time_waited, 0),
+               'client'  VALUE w.client_id,
+               'svc'     VALUE sv_w.service_name,
+               'hang'    VALUE w.blocking_hangchain_info,
+               'inPlsql' VALUE CASE WHEN w.in_plsql_execution = 'Y' THEN 1 END,
+               'inParse' VALUE CASE WHEN w.in_parse = 'Y' OR w.in_hard_parse = 'Y' THEN 1 END,
+               -- Blocker root-cause pointers (only when the blocker was sampled).
+               'bSessType' VALUE b.session_type,
+               'bSqlOp'  VALUE b.sql_opname,
+               'bSqlExec' VALUE TO_CHAR(b.sql_exec_start, 'YYYY-MM-DD"T"HH24:MI:SS'),
+               'bPhv'    VALUE NULLIF(b.sql_plan_hash_value, 0),
+               'bTopSql' VALUE CASE WHEN b.top_level_sql_id <> NVL(b.sql_id, '-') THEN b.top_level_sql_id END,
+               'bPlsql'  VALUE CASE WHEN pb.owner IS NOT NULL THEN
+                                 pb.owner || '.' || pb.object_name ||
+                                 CASE WHEN pb.procedure_name IS NOT NULL THEN '.' || pb.procedure_name END END,
+               'bXid'    VALUE RAWTOHEX(b.xid),
+               'bObj'    VALUE CASE WHEN ob.owner IS NOT NULL
+                                    THEN ob.owner || '.' || ob.object_name END,
+               'bP1t'    VALUE b.p1text, 'bP1' VALUE b.p1,
+               'bP2t'    VALUE b.p2text, 'bP2' VALUE b.p2,
+               'bP3t'    VALUE b.p3text, 'bP3' VALUE b.p3,
+               'bClient' VALUE b.client_id,
+               'bSvc'    VALUE sv_b.service_name,
+               'bInPlsql' VALUE CASE WHEN b.in_plsql_execution = 'Y' THEN 1 END
                ABSENT ON NULL
              )
              ORDER BY w.sample_time, w.instance_number, w.session_id
@@ -163,6 +216,20 @@ BEGIN
       LEFT JOIN cdb_users u_b ON u_b.con_id = b.con_id AND u_b.user_id = b.user_id
       -- The object the waiter was on (CURRENT_OBJ# is -1/0 when not applicable).
       LEFT JOIN cdb_objects ow ON ow.con_id = w.con_id AND ow.object_id = w.current_obj#
+      LEFT JOIN cdb_objects ob ON ob.con_id = b.con_id AND ob.object_id = b.current_obj#
+      -- Which stored procedure the session entered (PLSQL_ENTRY_*), resolved
+      -- to OWNER.PACKAGE.PROCEDURE via CDB_PROCEDURES (container-aware).
+      LEFT JOIN cdb_procedures pw ON pw.con_id = w.con_id AND pw.object_id = w.plsql_entry_object_id
+                                 AND pw.subprogram_id = w.plsql_entry_subprogram_id
+      LEFT JOIN cdb_procedures pb ON pb.con_id = b.con_id AND pb.object_id = b.plsql_entry_object_id
+                                 AND pb.subprogram_id = b.plsql_entry_subprogram_id
+      -- Service name (ASH only stores the hash).
+      LEFT JOIN (SELECT dbid, service_name_hash, MIN(service_name) AS service_name
+                   FROM dba_hist_service_name GROUP BY dbid, service_name_hash) sv_w
+             ON sv_w.dbid = w.dbid AND sv_w.service_name_hash = w.service_hash
+      LEFT JOIN (SELECT dbid, service_name_hash, MIN(service_name) AS service_name
+                   FROM dba_hist_service_name GROUP BY dbid, service_name_hash) sv_b
+             ON sv_b.dbid = b.dbid AND sv_b.service_name_hash = b.service_hash
      WHERE w.blocking_session IS NOT NULL
        AND w.blocking_session_status IN ('VALID', 'NOT IN WAIT', 'GLOBAL');
   END IF;
@@ -188,6 +255,11 @@ BEGIN
                             FROM dba_hist_active_sess_history
                            WHERE sample_time BETWEEN l_begin AND l_end
                              AND sql_id IS NOT NULL
+                          UNION
+                          SELECT dbid, top_level_sql_id
+                            FROM dba_hist_active_sess_history
+                           WHERE sample_time BETWEEN l_begin AND l_end
+                             AND top_level_sql_id IS NOT NULL
                         )
                   GROUP BY st.sql_id
                ) x
