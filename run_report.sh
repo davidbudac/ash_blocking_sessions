@@ -29,134 +29,45 @@
 # Plain POSIX sh: runs under AIX /bin/sh (ksh), ksh93, and bash alike.
 
 set -eu
-
-CONN="${1:-AUTO}"
-BEGIN_TIME="${2:-AUTO}"
-END_TIME="${3:-AUTO}"
-OUT_FILE="${4:-AUTO}"
-
-# Catch the pre-connect-string calling convention (times used to come first).
-case "$CONN" in
-  [0-9][0-9][0-9][0-9]-*)
-    echo "ERROR: the first argument is the connect string, not the begin time." >&2
-    echo "       ./run_report.sh \"/ as sysdba\" $*" >&2
-    exit 2
-    ;;
-esac
-
-if [ "$CONN" = AUTO ] || [ -z "$CONN" ]; then
-  CONN="/ as sysdba"
-fi
-
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+[ "$#" -le 4 ] || { echo "ERROR: expected at most four arguments" >&2; exit 2; }
+CONN=${1:-AUTO}
+BEGIN_TIME=${2:-AUTO}
+END_TIME=${3:-AUTO}
+OUT_FILE=${4:-AUTO}
+[ "$CONN" != AUTO ] || CONN='/ as sysdba'
+SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 cd "$SCRIPT_DIR"
-
-if ! command -v sqlplus >/dev/null 2>&1; then
-  echo "ERROR: sqlplus not found on PATH. Set your Oracle environment first" >&2
-  echo "       (e.g. '. oraenv'), then re-run." >&2
-  exit 1
-fi
-
-# AUTO output name: ash_blocking[_<dbname>]_<timestamp>.html. The DB name isn't
-# known until sqlplus has emitted meta.json, so remember the timestamp now and
-# fold the name in after the split (see below). A caller-supplied name is used
-# verbatim.
-OUT_FILE_AUTO=0
-if [ "$OUT_FILE" = AUTO ] || [ -z "$OUT_FILE" ]; then
-  OUT_FILE_AUTO=1
-  OUT_TS="$(date '+%Y%m%d_%H%M%S')"
-  OUT_FILE="ash_blocking_$OUT_TS.html"
-fi
-
-# Mask the password when echoing a user/pw@service connect string.
-CONN_DISPLAY="$CONN"
-case "$CONN" in
-  */*@*) CONN_DISPLAY="${CONN%%/*}/***@${CONN#*@}" ;;
+# Strict calendar validation before any SQL*Plus substitution. No quotes,
+# ampersands, whitespace or SQL fragments can pass this grammar.
+ASH_BEGIN_TIME="$BEGIN_TIME" ASH_END_TIME="$END_TIME" awk -f scripts/validate-times.awk
+case "$OUT_FILE" in
+ AUTO) OUT_FILE="ash_blocking_$(date '+%Y%m%d_%H%M%S')_$$.html" ;;
+ ''|.*|*[!A-Za-z0-9_.-]*|ash_blocking_demo.html) echo 'ERROR: unsafe or reserved output basename' >&2; exit 2 ;;
 esac
-
-mkdir -p "$SCRIPT_DIR/reports"
-TMPD="$SCRIPT_DIR/reports/.build.$$"
+case "$OUT_FILE" in *.html) ;; *) echo 'ERROR: output must end in .html' >&2; exit 2 ;; esac
+[ ! -L reports ] || { echo 'ERROR: reports must not be a symlink' >&2; exit 2; }
+mkdir -p reports
+[ ! -e "reports/$OUT_FILE" ] && [ ! -L "reports/$OUT_FILE" ] || { echo 'ERROR: output already exists' >&2; exit 2; }
+command -v sqlplus >/dev/null 2>&1 || { echo 'ERROR: sqlplus not found on PATH' >&2; exit 1; }
+umask 077
+TMPD="reports/.build.$$"
 mkdir "$TMPD"
-trap 'rm -rf "$TMPD"' EXIT INT TERM
-
-OUT_DISPLAY="$OUT_FILE"
-[ "$OUT_FILE_AUTO" = 1 ] && OUT_DISPLAY="ash_blocking_<dbname>_$OUT_TS.html"
-echo "==> Querying ASH (read-only)"
-echo "    conn=$CONN_DISPLAY  begin=$BEGIN_TIME  end=$END_TIME  out=$OUT_DISPLAY"
-
-# $CONN is expanded unquoted on purpose: '/ as sysdba' must reach sqlplus as
-# three words. A user/pw@service string has no spaces, so it stays one word.
+trap 'rm -rf "$TMPD"' 0
+trap 'exit 130' INT
+trap 'exit 143' TERM
+echo '==> Querying ASH (read-only)'
+# Disable pathname expansion while splitting the traditional / as sysdba form.
+set -f
 RC=0
-sqlplus -S -L $CONN @build_report.sql \
-  "$BEGIN_TIME" "$END_TIME" > "$TMPD/out.log" 2>&1 || RC=$?
+sqlplus -S -L $CONN @build_report.sql "$BEGIN_TIME" "$END_TIME" > "$TMPD/out.log" 2>&1 || RC=$?
 if [ "$RC" -ne 0 ]; then
-  echo "ERROR: sqlplus failed (exit $RC). Output follows:" >&2
-  cat "$TMPD/out.log" >&2
-  exit "$RC"
+ echo "ERROR: sqlplus failed (exit $RC)" >&2
+ cat "$TMPD/out.log" >&2
+ exit "$RC"
 fi
-
-# Split the captured output: JSON chunk lines into meta/data files (kept as
-# <=500-char lines so no tool ever sees an over-long record — matters on AIX),
-# everything else is progress info for the user. Chunk lines arrive wrapped in
-# '#' sentinels (#chunk#) protecting whitespace from SQL*Plus line trimming;
-# strip them here. Boundaries can fall mid-token; the splice below joins the
-# chunks WITHOUT newlines.
-awk -v mf="$TMPD/meta.json" -v df="$TMPD/data.json" '
-  /^__META_JSON_BEGIN__$/ { s=1; next }
-  /^__META_JSON_END__$/   { s=0; next }
-  /^__DATA_JSON_BEGIN__$/ { s=2; next }
-  /^__DATA_JSON_END__$/   { s=0; next }
-  s==1 { print substr($0, 2, length($0) - 2) > mf; next }
-  s==2 { print substr($0, 2, length($0) - 2) > df; next }
-  { print "    " $0 }
-' "$TMPD/out.log"
-
-if [ ! -s "$TMPD/meta.json" ] || [ ! -s "$TMPD/data.json" ]; then
-  echo "ERROR: did not find the JSON payload in the sqlplus output." >&2
-  echo "       Full output follows:" >&2
-  cat "$TMPD/out.log" >&2
-  exit 1
-fi
-
-# For an AUTO name, fold the database name into the file name now that meta.json
-# exists. "dbName" is the first field of the meta JSON (from V$DATABASE), so it
-# never straddles a 500-char chunk boundary; still, concatenate the chunk lines
-# before matching to be safe. Sanitize to a filesystem-safe slug (DB names are
-# alnum in practice, but $/#-style chars are legal in a name).
-if [ "$OUT_FILE_AUTO" = 1 ]; then
-  DB_NAME=$(awk '{printf "%s", $0}' "$TMPD/meta.json" \
-            | sed -n 's/.*"dbName" *: *"\([^"]*\)".*/\1/p')
-  DB_SLUG=$(printf '%s' "$DB_NAME" | tr -c 'A-Za-z0-9' '_' | sed 's/_*$//')
-  if [ -n "$DB_SLUG" ]; then
-    OUT_FILE="ash_blocking_${DB_SLUG}_$OUT_TS.html"
-  fi
-fi
-
-# The placeholders must sit ALONE on their own lines in the template, exactly
-# once each (checked on the template, whose lines are short — never on the
-# rendered file, whose JSON line is huge and can upset line-based AIX tools).
-PLACEHOLDERS=$(awk '$0=="__META_JSON__" || $0=="__DATA_JSON__"' assets/template.html | sort -u | wc -l)
-if [ "$PLACEHOLDERS" -ne 2 ]; then
-  echo "ERROR: assets/template.html must contain __META_JSON__ and __DATA_JSON__" >&2
-  echo "       each alone on its own line (found $PLACEHOLDERS of 2)." >&2
-  exit 1
-fi
-
-# Splice the JSON into the template: each placeholder line is replaced by its
-# JSON chunks joined WITHOUT newlines (one long line — fine for browsers).
-awk -v mf="$TMPD/meta.json" -v df="$TMPD/data.json" '
-  function insert(f,  line) {
-    while ((getline line < f) > 0) printf "%s", line
-    close(f)
-    printf "\n"
-  }
-  $0 == "__META_JSON__" { insert(mf); next }
-  $0 == "__DATA_JSON__" { insert(df); next }
-  { print }
-' assets/template.html > "$TMPD/report.html"
-
-mv "$TMPD/report.html" "$SCRIPT_DIR/reports/$OUT_FILE"
-
-echo
+LC_ALL=C awk -v mf="$TMPD/meta.json" -v df="$TMPD/data.json" -f scripts/split-protocol.awk "$TMPD/out.log"
+scripts/assemble-report.sh assets/template.html "$TMPD/meta.json" "$TMPD/data.json" "$TMPD/report.html"
+# Open the exact destination exclusively. Unlike ln, redirection never treats
+# a destination directory as a container for a new report.html child.
+(set -C; cat "$TMPD/report.html" > "reports/$OUT_FILE") || { echo 'ERROR: output creation failed (possibly already exists)' >&2; exit 1; }
 echo "==> Report: $SCRIPT_DIR/reports/$OUT_FILE"
-echo "    open $SCRIPT_DIR/reports/$OUT_FILE"

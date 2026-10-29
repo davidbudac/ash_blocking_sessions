@@ -11,3 +11,7 @@ reports/ash_blocking_2*.html
 # Editor scratch
 *.swp
 *~
+
+# Local Python packaging-test cache
+__pycache__/
+*.pyc

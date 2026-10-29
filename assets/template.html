@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ASH Blocking Sessions Timeline</title>
   <style>
     :root {
@@ -106,6 +107,23 @@
     .group-label { margin: 22px 22px 0; font-size: 11px; font-weight: 700; letter-spacing: 0.8px;
       text-transform: uppercase; color: #8a97a5; display: flex; align-items: center; gap: 12px; }
     .group-label::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+    .scope-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+    #investigation label { display: inline-flex; flex-direction: column; gap: 4px; max-inline-size: 100%; }
+    #investigation select { max-inline-size: min(100%, 24rem); min-block-size: 36px; }
+    #investigation button { min-block-size: 36px; }
+    #investigation button:active { transform: scale(.98); }
+    .episode-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+    #investigation .episode-controls label { flex: 1 1 24rem; min-inline-size: 0; }
+    #episodeSelect { inline-size: 100%; min-inline-size: 0; }
+    #investigation #episodeSelect { max-inline-size: 100%; }
+    #investigation .redact-control { flex-direction: row; align-items: center; }
+    #investigation .brief-fallback { display: flex; inline-size: 100%; margin-block-start: 12px; }
+    #briefText { inline-size: 100%; box-sizing: border-box; }
+    .scrubber, .scrubber .zoomctl { flex-wrap: wrap; max-inline-size: 100%; }
+    #treeChain, .ct-main, .findings { overflow-wrap: anywhere; }
+    .chart-scroll { overflow-x: auto; overscroll-behavior-inline: contain; }
+    #chart-lanes { min-inline-size: 760px; }
+    :focus-visible { outline: 2px solid oklch(50% .13 250); outline-offset: 3px; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 </head>
@@ -144,8 +162,32 @@
     <span style="margin-left:auto; color:#bdc3c7;" id="counter"></span>
   </div>
   <!-- ① At-a-glance: the answer, before any chart -->
+  <section id="investigation">
+    <h2>Investigation scope</h2>
+    <div class="scope-controls">
+      <label>PDB / container <select id="filterContainer"><option value="">All</option></select></label>
+      <label>Service <select id="filterService"><option value="">All</option></select></label>
+      <label>Module <select id="filterModule"><option value="">All</option></select></label>
+      <label>Object <select id="filterObject"><option value="">All</option></select></label>
+      <label>SQL ID <select id="filterSql"><option value="">All</option></select></label>
+      <button type="button" id="scopeReset">Reset scope</button>
+    </div>
+    <p>Filters match waiter fields exactly and combine with AND. Referenced blocker identities and enrichment remain as context; other waiter rows are excluded. Session Find remains separate highlighting.</p>
+    <p id="scopeCount" aria-live="polite"></p>
+    <div class="episode-controls">
+      <label>Contention episode <select id="episodeSelect"><option value="">All episodes</option></select></label>
+      <button type="button" id="episodeClear">Clear episode</button>
+    </div>
+    <p id="episodeNote"></p>
+    <details><summary>Incident brief export</summary>
+      <label class="redact-control"><input type="checkbox" id="briefRedact"> Redact: aggregate counts only</label>
+      <button type="button" id="briefDownload">Download Markdown</button>
+      <p>Includes current waiter / episode scope and selected sample / chain evidence. Redaction omits all identifiers, timestamps, SQL and descriptive fields.</p>
+      <label class="brief-fallback">Selectable Markdown fallback <textarea id="briefText" readonly rows="10"></textarea></label>
+    </details>
+  </section>
   <section class="summary">
-    <h2>Key findings — whole window</h2>
+    <h2>Key findings — current investigation scope</h2>
     <div class="kpis" id="kpis"></div>
     <div class="findings" id="findings"></div>
   </section>
@@ -157,7 +199,7 @@
     <div id="chart-overview" style="height: 104px"></div>
     <div class="footnote">Stacked area = distinct blocked sessions at each ASH sample, colored by wait class (same OEM palette as the timeline).
       <b>Drag the shaded window</b> (or its handles) along the bottom to zoom the session timeline below; <b>click anywhere</b> on the strip to focus that sample across all chains.
-      The <b>peak</b> marker flags the busiest instant; the right edge is flagged <b>ongoing</b> if blocking was still active at window end, else <b>resolved</b>.</div>
+      The <b>peak</b> marker flags the busiest observed instant; the last observation marker does not establish when blocking ended.</div>
   </section>
 
   <!-- ③ The timeline: every session that blocked or was blocked, one lane each -->
@@ -165,10 +207,12 @@
   <section>
     <h2>One lane per session — click a sample to open its blocking tree</h2>
     <div id="sampleSel" class="sample-sel" style="display:none;"></div>
-    <div id="chart-lanes" style="height: 460px"></div>
+    <div class="chart-scroll" tabindex="0" role="region" aria-label="Session timeline, scroll horizontally on narrow screens">
+      <div id="chart-lanes" style="height: 460px"></div>
+    </div>
     <div class="footnote">Each lane is one session, grouped into its wait chain (◆ = chain root, ↳ indent = depth in the chain).
       Each cell is one ASH sample (≈10s). <b>Filled cell</b> = session was blocked that sample (color = "Color by");
-      <b>outlined cell</b> = session was only blocking others (holding the lock); filled with a dark border = waiting <i>and</i> blocking at once.
+      <b>outlined cell</b> = session was referenced as a blocker (activity may be unknown); filled with a dark border = waiting <i>and</i> blocking at once.
       <b>Click any cell</b> to focus that sample and isolate that session's chain in the tree below;
       <b>click empty plot space</b> to see all chains at that instant. Drag the slider to zoom long windows.
       A <b>&#215;N stacked lane</b> merges N similar waiters (same blocker, module/action and wait event); its cell height shows how many of them
@@ -226,7 +270,7 @@ __DATA_JSON__
   <script>
   (function(){
     "use strict";
-    const data = (window.ASH_DATA || []).slice();
+    let data = (window.ASH_DATA || []).slice();
     const meta = window.ASH_META || {};
 
     // sql_id -> statement text (first ~200 chars), emitted into meta.sqlText by
@@ -260,11 +304,11 @@ __DATA_JSON__
     // Short "what usually causes this" line for the sample detail. Heuristic, not a verdict.
     function rootCauseHint(s) {
       const ev = s.ev || '', e = enqInfo(ev, s.p1, s.p2, s.p3);
-      const blockerIdle = !s.bEv && !s.bState;
+      const blockerUnknown = blockerActivity(s) === 'not observed / unknown';
       if (e) {
         if (e.type === 'TX') {
           if (e.mode === 6) return `Row lock: the blocker holds an uncommitted change to the same row and releases it only on COMMIT/ROLLBACK` +
-                                   (blockerIdle ? ' — the blocker was idle (not sampled) while holding it, i.e. waiting on the application to commit.' : '.');
+                                   (blockerUnknown ? ' — blocker activity was not observed; absence from ASH does not prove idleness.' : '.');
           if (e.mode === 4) return 'Share-mode TX wait — not a plain row lock: usually a unique/primary-key insert colliding with an uncommitted row, an ITL slot shortage on the block, or a bitmap-index entry.';
           return `TX enqueue requested in mode ${e.modeTxt}.`;
         }
@@ -304,7 +348,7 @@ __DATA_JSON__
       const sess = new Map(), blockers = new Map(), xids = new Set(), sqlIds = new Set();
       for (const s of samples) {
         sess.set(waiterKey(s), trip(s.inst, s.sid, s.serial));
-        if (s.bSid != null) { sess.set(blockerKey(s), trip(s.bInst, s.bSid, s.bSer)); blockers.set(blockerKey(s), trip(s.bInst, s.bSid, s.bSer)); }
+        if (s.bSid != null) { sess.set(blockerKey(s), trip(s.bInst || s.inst, s.bSid, s._bSer)); blockers.set(blockerKey(s), trip(s.bInst || s.inst, s.bSid, s._bSer)); }
         if (s.bXid) xids.add(s.bXid);
         for (const id of [s.sqlId, s.bSqlId, s.topSql, s.bTopSql]) if (id) sqlIds.add(id);
       }
@@ -321,7 +365,7 @@ __DATA_JSON__
 -- All queries are plain SELECTs against DBA_HIST_ACTIVE_SESS_HISTORY; they return every column (a.*).
 
 -- 1) The blocking tree at this sample, depth-indented, root blockers first.
---    A blocker that was idle at this instant has no ASH row of its own, so its
+--    A blocker not observed in ASH has unknown activity; its
 --    waiters start the tree (their BLOCKING_SESSION column still names it).
 WITH a AS (
   SELECT * FROM dba_hist_active_sess_history a
@@ -433,15 +477,41 @@ SELECT a.*
     for (const d of data) { d._tms = new Date(d.t).getTime(); }
     data.sort((a,b) => a._tms - b._tms);
 
-    // Median gap between distinct sample times ≈ ASH cadence (~10s for DBA_HIST).
-    // Used to translate "samples" into approximate blocked session-time.
-    const SAMPLE_MS = (() => {
-      const ts = [...new Set(data.map(d => d._tms))].sort((a, b) => a - b);
-      if (ts.length < 2) return 10000;
-      const gaps = []; for (let i = 1; i < ts.length; i++) gaps.push(ts[i] - ts[i - 1]);
-      gaps.sort((a, b) => a - b);
-      return gaps[Math.floor(gaps.length / 2)] || 10000;
-    })();
+    // Never infer cadence from blocking-only gaps. Older reports use the documented
+    // historical ASH fallback: 10 seconds per retained row (an estimate, not elapsed time).
+    const SAMPLE_MS = Math.max(1000, Math.min(10000, Number(meta.sampleCadenceMs) || 10000));
+    function sampleWeightMs(d) {
+      const explicit = Number(d.sampleWeightMs);
+      if (isFinite(explicit) && explicit > 0) return explicit;
+      const us = Number(d.usecsPerRow), factor = Number(meta.sampleWeightFactor);
+      return isFinite(us) && us > 0 && factor > 0 ? us / 1000 * factor : 10000;
+    }
+    function blockedMs(rows) { return rows.reduce((n, d) => n + sampleWeightMs(d), 0); }
+    function blockerActivity(d) {
+      // State wins over event: an ON CPU row may carry a stale event name.
+      if (d.bState === 'ON CPU') return 'ON CPU';
+      if (d.bState === 'WAITING' || (!d.bState && d.bEv)) return 'waiting' + (d.bEv ? ': ' + d.bEv : ' (event unknown)');
+      return d.bObserved ? 'observed; activity unknown' : 'not observed / unknown';
+    }
+
+    // Resolve a missing blocker serial only from unique evidence at this instant.
+    // Ambiguous/unobserved references stay sample-local, never bridge SID reuse.
+    const serialsAt = new Map();
+    function serialToken(d, inst, sid) { return d.t + '|' + inst + ':' + sid; }
+    function rememberSerial(d, inst, sid, serial) {
+      if (serial == null || serial === '' || Number(serial) <= 0) return;
+      const k = serialToken(d, inst, sid);
+      if (!serialsAt.has(k)) serialsAt.set(k, new Set());
+      serialsAt.get(k).add(String(serial));
+    }
+    for (const d of data) {
+      rememberSerial(d, d.inst || 1, d.sid, d.serial);
+      rememberSerial(d, d.bInst || d.inst || 1, d.bSid, d.bSer);
+    }
+    for (const d of data) {
+      const candidates = serialsAt.get(serialToken(d, d.bInst || d.inst || 1, d.bSid));
+      d._bSer = d.bSer != null && Number(d.bSer) > 0 ? d.bSer : candidates && candidates.size === 1 ? [...candidates][0] : null;
+    }
 
     // ----- Selection state -----
     // The lanes timeline is the primary control surface. Clicking a cell focuses
@@ -474,7 +544,11 @@ SELECT a.*
         const el = document.getElementById(id); if (el) el.innerHTML = '<div class="empty">No blocking samples found in this window.</div>';
       }
       const f = document.getElementById('findings');
-      if (f) f.innerHTML = '<div class="lead">No blocking samples in this window — no session was waiting on another.</div>';
+      if (f) f.innerHTML = '<div class="lead">No blocking samples were captured in this window. Short waits may fall between samples.</div>';
+      document.getElementById('scopeCount').textContent = '0 matching waiter rows / 0 total';
+      document.getElementById('episodeNote').textContent = 'No observed contention episodes to investigate or export.';
+      ['filterContainer', 'filterService', 'filterModule', 'filterObject', 'filterSql', 'scopeReset',
+       'episodeSelect', 'episodeClear', 'briefDownload', 'briefRedact'].forEach(id => { document.getElementById(id).disabled = true; });
       return;
     }
 
@@ -682,7 +756,7 @@ SELECT a.*
 
     function colorKey(d) {
       const mode = colorBySel.value;
-      if (mode === 'blocker')   return `${d.bInst||1}:${d.bSid}`;
+      if (mode === 'blocker')   return blockerKey(d);
       if (mode === 'waitClass') return d.wc || 'Other';
       if (mode === 'user')      return d.user || '(unknown user)';
       if (mode === 'prog')      return d.prog || '(no program)';
@@ -691,8 +765,8 @@ SELECT a.*
       return d.ev || '(no event)';
     }
 
-    function waiterKey(d) { return `${d.inst||1}:${d.sid}`; }
-    function blockerKey(d) { return `${d.bInst||1}:${d.bSid}`; }
+    function waiterKey(d) { return `${d.inst||1}:${d.sid},${d.serial == null ? '?' : d.serial}`; }
+    function blockerKey(d) { return `${d.bInst||d.inst||1}:${d.bSid},${d._bSer == null ? '?@' + d.t : d._bSer}`; }
 
     // Per-SID identifier resolver: walks the dataset once and picks the most
     // frequent value of each identifier per SID (handles cases where a SID
@@ -781,7 +855,7 @@ SELECT a.*
     }
 
     // ----- Distinct sample times (native ASH cadence ≈ SAMPLE_MS) -----
-    const allTs = [...new Set(data.map(d => d._tms))].sort((a, b) => a - b);
+    let allTs = [...new Set(data.map(d => d._tms))].sort((a, b) => a - b);
     function snapT(t) {
       let best = allTs[0], bd = Infinity;
       for (const x of allTs) { const dd = Math.abs(x - t); if (dd < bd) { bd = dd; best = x; } }
@@ -811,7 +885,7 @@ SELECT a.*
     // stable chain root. It drives lane grouping/indentation AND defines what
     // "the chain" means when a click isolates one — per-instant parents can flap
     // between samples, window-level roots don't.
-    const CHAIN = (() => {
+    function buildChain() {
       const parentCounts = new Map();
       for (const d of data) {
         const wk = waiterKey(d), bk = blockerKey(d);
@@ -850,10 +924,11 @@ SELECT a.*
         groups.get(info.root).push(sid);
       }
       return { sidInfo, groups, parentOf, rootOf: sid => (sidInfo.get(sid) || { root: sid }).root };
-    })();
+    }
+    let CHAIN = buildChain();
 
     // Default focus: the sample with the most distinct blocked sessions (peak contention).
-    const peakT = (() => {
+    function findPeak() {
       const byT = new Map();
       for (const d of data) {
         if (!byT.has(d._tms)) byT.set(d._tms, new Set());
@@ -862,7 +937,8 @@ SELECT a.*
       let best = allTs[0], n = -1;
       for (const [t, s] of byT) if (s.size > n) { n = s.size; best = t; }
       return best;
-    })();
+    }
+    let peakT = findPeak();
 
     // Rows the current selection covers: one instant, optionally one chain.
     function selectedSamples() {
@@ -947,6 +1023,7 @@ SELECT a.*
     }
 
     function renderLanes() {
+      if (!data.length) return;
       const maxLanes = Math.max(5, Math.min(200, +topNInput.value || 40));
 
       // 1) Row order: whole chains (busiest first), root first then by depth,
@@ -1046,7 +1123,7 @@ SELECT a.*
           const c = m.get(t);
           const dom = [...c.ckCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
           const state = `${c.w ? 1 : 0}|${c.w && c.b ? 1 : 0}|${dom}`;
-          if (cur && cur.state === state && t - cur.t1 <= SAMPLE_MS * 1.5) {
+          if (cur && cur.state === state && t - cur.t1 <= SAMPLE_MS * 1.05) {
             cur.t1 = t; cur.w += c.w; cur.b += c.b;
             for (const s of c.samples) cur.samples.push(s);
           } else {
@@ -1082,7 +1159,7 @@ SELECT a.*
             const c = m.get(t), n = c.sids.size;
             const dom = [...c.ckCounts.entries()].sort((a, b) => b[1] - a[1])[0][0];
             const state = `${n}|${dom}`;
-            if (cur && cur.state === state && t - cur.t1 <= SAMPLE_MS * 1.5) {
+            if (cur && cur.state === state && t - cur.t1 <= SAMPLE_MS * 1.05) {
               cur.t1 = t; cur.w += c.rows.length;
               for (const s of c.rows) cur.samples.push(s);
             } else {
@@ -1146,7 +1223,7 @@ SELECT a.*
                 .map(([e, n]) => `&nbsp;&nbsp;${escapeHtml(e)}: <b>${n}</b>`).join('<br>');
               const sids = [...new Set(r.samples.filter(s => s._tms === r.t0).map(waiterKey))];
               return `<b>${r.n} of ${r.M}</b> stacked waiters waiting<br>` +
-                     `${fmtTs(r.t0)} → ${fmtTs(r.t1 + SAMPLE_MS)}<br>` +
+                     `Observed: ${fmtTs(r.t0)} → ${fmtTs(r.t1)}<br>` +
                      `Blocked by: <b>${escapeHtml(st.parent)}</b><br>` +
                      `Module/action: <b>${escapeHtml(st.name)}</b><br>` +
                      `Waiting on:<br>${evTxt}<br>` +
@@ -1174,12 +1251,12 @@ SELECT a.*
             const topSql = [...sqlCounts.entries()].sort((a, b) => b[1] - a[1])[0];
             const sqlLine = topSql ? `SQL: <b>${escapeHtml(topSql[0])}</b>${sqlSnip(topSql[0]) ? ' — ' + escapeHtml(sqlSnip(topSql[0], 70)) : ''}${sqlCounts.size > 1 ? ` +${sqlCounts.size - 1} more` : ''}` : '';
             const bEvCounts = new Map();
-            for (const s of r.samples) if (blockerKey(s) === r.sid) bEvCounts.set(s.bEv || (s.bState === 'ON CPU' ? 'ON CPU' : '(idle — not sampled)'), (bEvCounts.get(s.bEv || (s.bState === 'ON CPU' ? 'ON CPU' : '(idle — not sampled)')) || 0) + 1);
+            for (const s of r.samples) if (blockerKey(s) === r.sid) bEvCounts.set(blockerActivity(s), (bEvCounts.get(blockerActivity(s)) || 0) + 1);
             const bEvLines = [...bEvCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
               .map(([e, n]) => `&nbsp;&nbsp;${escapeHtml(e)}: <b>${n}</b>`).join('<br>');
-            const role = r.filled ? (r.both ? 'waiting + blocking' : 'waiting') : 'blocking only (holding a lock)';
+            const role = r.filled ? (r.both ? 'waiting + blocking' : 'waiting') : 'referenced as blocker';
             return `<b>SID ${r.sid}</b> · ${role}<br>` +
-                   `${fmtTs(r.t0)} → ${fmtTs(r.t1 + SAMPLE_MS)}<br>` +
+                   `Observed: ${fmtTs(r.t0)} → ${fmtTs(r.t1)}<br>` +
                    (idLines ? `Identity:<br>${idLines}<br>` : '') +
                    (r.w ? `Waiting on:<br>${evLines}` : '') +
                    (r.w && objLine ? `<br>${objLine}` : '') +
@@ -1264,6 +1341,7 @@ SELECT a.*
 
     // ----- Selection → tree + detail table -----
     function applySelection(t, root) {
+      if (!data.length) return;
       selectedT = t;
       selectedRoot = root;
       refreshLanesSelection();
@@ -1633,7 +1711,7 @@ SELECT a.*
                 if (own.plsql) doing.push(`PL/SQL: <b>${escapeHtml(own.plsql)}</b>`);
                 if (own.xid) doing.push(`XID: ${escapeHtml(own.xid)}`);
               } else if (asB) {
-                doing.push(asB.bEv ? `Doing: <b>${escapeHtml(asB.bEv)}</b>` : asB.bState === 'ON CPU' ? 'Doing: <b>ON CPU</b>' : 'Doing: <i>idle — holding the lock, not sampled</i>');
+                doing.push(`Doing: <b>${escapeHtml(blockerActivity(asB))}</b>`);
                 if (asB.bSqlId) doing.push(`SQL: <b>${escapeHtml(asB.bSqlId)}</b>${asB.bSqlOp ? ' ' + escapeHtml(asB.bSqlOp) : ''}${sqlSnip(asB.bSqlId) ? ' — ' + escapeHtml(sqlSnip(asB.bSqlId, 70)) : ''}`);
                 if (asB.bPlsql) doing.push(`PL/SQL: <b>${escapeHtml(asB.bPlsql)}</b>`);
                 if (asB.bXid) doing.push(`XID: ${escapeHtml(asB.bXid)}`);
@@ -1882,6 +1960,7 @@ SELECT a.*
     // ----- Key findings: KPI tiles + plain-language summary -----
     // Computes the "answer" once from the raw samples, independent of bucket size.
     function renderSummary() {
+      if (!data.length) return;
       const waiters = new Set(data.map(waiterKey));
       const blockers = new Set(data.map(blockerKey));
 
@@ -1910,27 +1989,27 @@ SELECT a.*
 
       // Roots ranked by downstream blocked samples (mirrors the Top-roots chart).
       // Also track each root's active span and what it was doing while directly
-      // blocking (bEv/bSqlId enrichment) — drives the "idle vs active" verdict.
+      // blocking: evidence from observed states, including unknown activity.
       const byRoot = new Map();
       for (const d of data) {
         const r = rd(waiterKey(d)).root;
         let e = byRoot.get(r);
-        if (!e) { e = { n: 0, w: new Set(), ev: new Map(), t0: Infinity, t1: -Infinity, bEv: new Map(), bSql: new Map() }; byRoot.set(r, e); }
-        e.n++; e.w.add(waiterKey(d)); if (d.ev) e.ev.set(d.ev, (e.ev.get(d.ev) || 0) + 1);
+        if (!e) { e = { n: 0, ms: 0, w: new Set(), ev: new Map(), t0: Infinity, t1: -Infinity, bEv: new Map(), bSql: new Map() }; byRoot.set(r, e); }
+        e.n++; e.ms += sampleWeightMs(d); e.w.add(waiterKey(d)); if (d.ev) e.ev.set(d.ev, (e.ev.get(d.ev) || 0) + 1);
         if (d._tms < e.t0) e.t0 = d._tms; if (d._tms > e.t1) e.t1 = d._tms;
         if (blockerKey(d) === r) {
-          if (d.bEv) e.bEv.set(d.bEv, (e.bEv.get(d.bEv) || 0) + 1);
+          const activity = blockerActivity(d); e.bEv.set(activity, (e.bEv.get(activity) || 0) + 1);
           if (d.bSqlId) e.bSql.set(d.bSqlId, (e.bSql.get(d.bSqlId) || 0) + 1);
         }
       }
       const topOf = m => ([...m.entries()].sort((a,b)=>b[1]-a[1])[0] || [])[0] || '';
       const topRoots = [...byRoot.entries()].map(([root, e]) => ({
-        root, n: e.n, w: e.w.size, ev: topOf(e.ev), t0: e.t0, t1: e.t1, bEv: topOf(e.bEv), bSql: topOf(e.bSql)
-      })).sort((a,b) => b.n - a.n);
+        root, n: e.n, ms: e.ms, w: e.w.size, ev: topOf(e.ev), t0: e.t0, t1: e.t1, bEv: topOf(e.bEv), bSql: topOf(e.bSql)
+      })).sort((a,b) => b.ms - a.ms);
 
       const kpis = [
         { num: data.length,   lbl: 'Blocked samples' },
-        { num: fmtDur(data.length * SAMPLE_MS / 1000), lbl: '≈ Blocked session-time' },
+        { num: fmtDur(blockedMs(data) / 1000), lbl: '≈ Blocked session-time' },
         { num: waiters.size,  lbl: 'Waiting sessions' },
         { num: blockers.size, lbl: 'Blocking sessions' },
         { num: roots.size,    lbl: 'Wait chains' },
@@ -1941,19 +2020,17 @@ SELECT a.*
         `<div class="kpi${k.alert ? ' alert' : ''}"><div class="num">${k.num}</div><div class="lbl">${k.lbl}</div></div>`).join('');
 
       const lines = [];
+      lines.push('<div>Session-time is a sample-weight estimate; older reports without weights assume 10 seconds per retained historical ASH row. Cells use bounded cadence, not gaps between blocking observations.</div>');
       const top = topRoots[0];
       if (top) {
         const id = identityFor(top.root);
         const who = ['user','module','prog'].map(k => id[k]).filter(Boolean).slice(0, 2).join(' / ');
         lines.push(`<div class="lead">Biggest root cause: <b>${top.root}</b>${who ? ` (${escapeHtml(who)})` : ''} — ` +
-                   `≈<b>${fmtDur(top.n * SAMPLE_MS / 1000)}</b> of blocked session time (${top.n} samples) ` +
+                   `≈<b>${fmtDur(top.ms / 1000)}</b> of blocked session time (${top.n} samples) ` +
                    `across <b>${top.w}</b> waiter(s)${top.ev ? `, mostly <code>${escapeHtml(top.ev)}</code>` : ''}.</div>`);
-        // Idle vs active blocker — the first triage question.
-        const doing = top.bEv
-          ? `was active on <code>${escapeHtml(top.bEv)}</code>${top.bSql ? `, running SQL <code>${escapeHtml(top.bSql)}</code>` : ''}`
-          : `was <b>idle while holding the lock</b> (never sampled as active — likely an uncommitted transaction)`;
-        lines.push(`<div>While blocking, <b>${top.root}</b> ${doing}; its chain was active ` +
-                   `<b>${fmtTs(top.t0)}</b> → <b>${fmtTs(top.t1)}</b> (${fmtDur((top.t1 - top.t0 + SAMPLE_MS) / 1000)}).</div>`);
+        const doing = top.bEv || 'not observed / unknown';
+        lines.push(`<div>Most frequent blocker activity evidence for <b>${top.root}</b>: <b>${escapeHtml(doing)}</b>. ` +
+                   `Blocking observed <b>${fmtTs(top.t0)}</b> → <b>${fmtTs(top.t1)}</b>; gaps do not establish continuous blocking or idleness.</div>`);
         // Root-cause pointers for the top root: dominant enqueue resource/mode of its
         // waiters, plus whatever the enrichment captured about the blocker itself.
         const dom = (rows, f) => { const m = new Map(); for (const r of rows) { const v = f(r); if (v) m.set(v, (m.get(v) || 0) + 1); }
@@ -1978,17 +2055,17 @@ SELECT a.*
                  `${peakT ? ` around <b>${fmtTs(new Date(peakT).getTime())}</b>` : ''}; ` +
                  `deepest wait chain is <b>${maxDepth + 1}</b> level(s).</div>`);
       if (topRoots.length > 1) {
-        const rest = topRoots.slice(1, 3).map(r => `<b>${r.root}</b> (≈${fmtDur(r.n * SAMPLE_MS / 1000)})`).join(', ');
+        const rest = topRoots.slice(1, 3).map(r => `<b>${r.root}</b> (≈${fmtDur(r.ms / 1000)})`).join(', ');
         lines.push(`<div>Other notable roots: ${rest}.</div>`);
       }
-      // Resolved, or still going? Compare the last blocking sample to the window end.
+      // Describe observation proximity, never infer resolution from missing rows.
       const lastT = data[data.length - 1]._tms;
       const endMs = meta.endTime ? new Date(meta.endTime).getTime() : NaN;
       if (isFinite(endMs) && endMs - lastT <= 2 * SAMPLE_MS) {
-        lines.push(`<div style="color:var(--warn);"><b>Blocking was still active in the last sample of the window</b> — ` +
-                   `likely ongoing; consider a wider window or live V$ views.</div>`);
+        lines.push(`<div style="color:var(--warn);"><b>Blocking observed near the window end</b> — ` +
+                   `activity after the last observation is unknown.</div>`);
       } else {
-        lines.push(`<div>Last blocking sample at <b>${fmtTs(lastT)}</b> — contention cleared before the window ended.</div>`);
+        lines.push(`<div>Last blocking sample at <b>${fmtTs(lastT)}</b> — no later blocking observations in this report; resolution is unknown.</div>`);
       }
       lines.push(`<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;color:#555;">SQL to pull the whole window yourself (SELECT * from DBA_HIST_ACTIVE_SESS_HISTORY)</summary>` +
                  sqlBoxHtml('windowSql', sqlForWindow(), 'All blocked samples in the report window') + `</details>`);
@@ -2016,7 +2093,7 @@ SELECT a.*
         return n;
       }
       for (const s of samples) {
-        const wKey = `${s.inst||1}:${s.sid}`;
+        const wKey = waiterKey(s);
         const w = getNode(wKey, s.inst, s.sid, s.serial);
         if (!w.asWaiter) w.asWaiter = { ev:s.ev, wc:s.wc, obj:s.obj, sqlId:s.sqlId, user:s.user,
                                         prog:s.prog, module:s.module, action:s.action, mach:s.mach, conId:s.conId,
@@ -2027,10 +2104,10 @@ SELECT a.*
                                         _row:s };
         w.waitCount++;
         if (s.bSid != null) {
-          const bKey = `${s.bInst||1}:${s.bSid}`;
-          const b = getNode(bKey, s.bInst, s.bSid, s.bSer);
+          const bKey = blockerKey(s);
+          const b = getNode(bKey, s.bInst || s.inst, s.bSid, s._bSer);
           if (!b.asBlocker) b.asBlocker = { user:s.bUser, prog:s.bProg, module:s.bMod, action:s.bAct,
-                                            mach:s.bMach, ev:s.bEv, sqlId:s.bSqlId, wc:s.bWc,
+                                            mach:s.bMach, ev:s.bEv, sqlId:s.bSqlId, wc:s.bWc, observed:s.bObserved,
                                             state:s.bState, status:s.bStatus, conId:s.conId,
                                             sessType:s.bSessType, sqlOp:s.bSqlOp, sqlExec:s.bSqlExec, phv:s.bPhv,
                                             topSql:s.bTopSql, plsql:s.bPlsql, xid:s.bXid, obj:s.bObj,
@@ -2099,13 +2176,11 @@ SELECT a.*
           const b = n.asBlocker;
           ident = [b.user, b.module ? b.module + (b.action ? '/'+b.action : '') : null].filter(Boolean).map(escapeHtml).join(' · ')
                   || '<span class="ct-meta">identity not sampled</span>';
-          activity = b.ev ? `active: <b>${escapeHtml(b.ev)}</b>` + (b.obj ? ` on <b>${escapeHtml(b.obj)}</b>` : '') + (b.wc ? ` <span class="ct-wc">${escapeHtml(b.wc)}</span>` : '')
-                   : b.state === 'ON CPU' ? `active: <b>ON CPU</b>${b.obj ? ` on <b>${escapeHtml(b.obj)}</b>` : ''}`
-                   : `<i class="ct-meta">holding the lock while idle — not sampled as active (waiting on the client, e.g. for a COMMIT)</i>`;
+          activity = `<b>${escapeHtml(blockerActivity({ bState:b.state, bEv:b.ev, bObserved:b.observed }))}</b>`;
           activity += kidsTxt;
           lines = [sessLine(b, [b.status && `status ${escapeHtml(b.status)}`]), sqlLine(b), lockLine(b, b.ev)];
-          if (!b.ev && b.state !== 'ON CPU') hint = 'Root blocker idle in the database: the lock is released only when the application commits/rolls back or the session ends. Query 3/4 below shows the statement that took the lock.';
-          else if (b.ev && /^enq: /.test(b.ev)) hint = 'The blocker is itself waiting on a lock — follow the chain upward.';
+          if (!b.ev && b.state !== 'ON CPU' && b.state !== 'WAITING') hint = 'Blocker activity is unknown. Historical SQL may provide context; it does not prove which statement acquired the lock.';
+          else if (b.state !== 'ON CPU' && b.ev && /^enq: /.test(b.ev)) hint = 'The blocker is itself waiting on a lock — follow the chain upward.';
         } else { ident = ''; activity = ''; }
         if (n.waitCount > 1) lines.push(`${n.waitCount} samples`);
         const linesHtml = lines.filter(Boolean).map(l => `<div class="ct-kv">${l}</div>`).join('');
@@ -2139,7 +2214,7 @@ SELECT a.*
         <tr>
           <td>${fmtTs(s._tms)}</td>
           <td>${s.inst||1}:${s.sid},${s.serial||''}</td>
-          <td><span class="pill ${s.bStatus==='VALID'?'warn':(s.bStatus==='NOT IN WAIT'?'chain':'')}">${s.bInst||1}:${s.bSid},${s.bSer||''} ${s.bStatus?'· '+s.bStatus:''}</span></td>
+          <td><span class="pill ${s.bStatus==='VALID'?'warn':(s.bStatus==='NOT IN WAIT'?'chain':'')}">${s.bInst||s.inst||1}:${s.bSid},${s._bSer == null ? '?' : s._bSer} ${s.bStatus?'· '+s.bStatus:''}</span></td>
           <td>${escapeHtml(s.ev||'')}</td>
           <td>${escapeHtml(s.wc||'')}</td>
           <td>${escapeHtml(s.obj||'')}</td>
@@ -2207,6 +2282,7 @@ SELECT a.*
     // and #colorBy controls don't change what it shows (it's always by wait class).
     let overviewWired = false, ovSyncing = false;
     function renderOverview() {
+      if (!data.length) return;
       const winStart = allTs[0] - SAMPLE_MS / 2;
       const winEnd   = allTs[allTs.length - 1] + SAMPLE_MS / 2;
 
@@ -2245,7 +2321,7 @@ SELECT a.*
         data: allTs.map(t => [t, (counts.get(t) && counts.get(t).get(wc)) || 0])
       }));
 
-      // Peak marker + ongoing/resolved marker on a dedicated transparent line series,
+      // Peak marker + last-observation marker on a dedicated transparent line series,
       // so annotations never perturb the stacks. Ongoing check mirrors renderSummary().
       const peakN = totalAt(peakT);
       const lastT = allTs[allTs.length - 1];
@@ -2257,11 +2333,11 @@ SELECT a.*
         lineStyle: { color: '#2c3e50', width: 1, type: 'dashed' }
       }, ongoing ? {
         xAxis: lastT,
-        label: { show: true, formatter: 'ongoing', position: 'insideEndTop', fontSize: 9, color: '#c0392b' },
+        label: { show: true, formatter: 'observed near end', position: 'insideEndTop', fontSize: 9, color: '#c0392b' },
         lineStyle: { color: '#c0392b', width: 1.5, type: 'solid' }
       } : {
         xAxis: lastT,
-        label: { show: true, formatter: 'resolved', position: 'insideEndTop', fontSize: 9, color: '#196f3d' },
+        label: { show: true, formatter: 'last observed', position: 'insideEndTop', fontSize: 9, color: '#196f3d' },
         lineStyle: { color: '#27ae60', width: 1, type: 'dotted' }
       }];
       series.push({
@@ -2348,6 +2424,124 @@ SELECT a.*
         });
       }
     }
+
+    // Scope changes rebuild derived caches, while retaining the chart instances and listeners.
+    const sourceRows = data.slice();
+    const filterFields = [['Container', 'conId'], ['Service', 'svc'], ['Module', 'module'], ['Object', 'obj'], ['Sql', 'sqlId']];
+    let episodes = [], episodeIndex = null;
+    const episodeGapMs = Math.max(2000, Math.min(30000, SAMPLE_MS * 2));
+    function fieldValue(row, key) { return row[key] == null || row[key] === '' ? '(missing)' : String(row[key]); }
+    function filteredRows() {
+      return sourceRows.filter(row => filterFields.every(pair => {
+        const value = document.getElementById('filter' + pair[0]).value;
+        return !value || fieldValue(row, pair[1]) === value;
+      }));
+    }
+    function makeEpisodes(rows) {
+      const byTime = new Map();
+      rows.forEach(row => { if (!byTime.has(row._tms)) byTime.set(row._tms, []); byTime.get(row._tms).push(row); });
+      const result = [];
+      let previousParents = new Map();
+      for (const [t, at] of byTime) {
+        let ep = result[result.length - 1];
+        if (!ep || t - ep.last > episodeGapMs) {
+          ep = { start: t, last: t, rows: [], peak: 0, changes: 0, observations: 0 };
+          result.push(ep); previousParents = new Map();
+        }
+        const parents = new Map();
+        at.forEach(row => parents.set(waiterKey(row), {
+          key: blockerKey(row), address: (row.bInst || row.inst || 1) + ':' + row.bSid, known: row._bSer != null
+        }));
+        for (const [waiter, parent] of parents) {
+          const previous = previousParents.get(waiter);
+          if (previous && (previous.address !== parent.address ||
+              (previous.known && parent.known && previous.key !== parent.key))) ep.changes++;
+        }
+        previousParents = parents;
+        ep.last = t; at.forEach(row => ep.rows.push(row)); ep.observations++;
+        ep.peak = Math.max(ep.peak, parents.size);
+      }
+      return result;
+    }
+    function episodeDescription(ep, i) {
+      return 'Episode ' + (i + 1) + ': first ' + fmtTs(ep.start) + ', last ' + fmtTs(ep.last) +
+        ' · ' + ep.observations + ' sampled observations · ≈ ' + fmtDur(blockedMs(ep.rows) / 1000) +
+        ' weighted blocked session-time · peak ' + ep.peak + ' waiters · ' + ep.changes + ' observed parent changes';
+    }
+    function updateEpisodes(rows) {
+      episodes = makeEpisodes(rows);
+      document.getElementById('episodeSelect').innerHTML = '<option value="">All episodes</option>' + episodes.map((ep, i) =>
+        '<option value="' + i + '">' + escapeHtml(episodeDescription(ep, i)) + '</option>').join('');
+      document.getElementById('episodeSelect').value = episodeIndex == null ? '' : String(episodeIndex);
+      document.getElementById('episodeNote').textContent = episodes.length + ' episode(s); ' + Math.max(0, episodes.length - 1) +
+        ' recurrence(s) after observable gaps > ' + episodeGapMs / 1000 + 's (2× bounded cadence). ' +
+        'These are sampled observations, not confirmed continuous duration or resolution. Parent changes compare the same waiter at consecutive observed samples within an episode.';
+    }
+    function rebuildScope() {
+      treeStopPlay();
+      const rows = filteredRows();
+      updateEpisodes(rows);
+      data = episodeIndex == null ? rows : episodes[episodeIndex] ? episodes[episodeIndex].rows : [];
+      allTs = [...new Set(data.map(d => d._tms))].sort((a, b) => a - b);
+      sessAtT.clear();
+      data.forEach(d => { if (!sessAtT.has(d._tms)) sessAtT.set(d._tms, new Set()); const set = sessAtT.get(d._tms); set.add(waiterKey(d)); set.add(blockerKey(d)); });
+      CHAIN = buildChain(); _identityCache = null; sidSqlIds = null; _laneStacks = null; _evToWc = null; expandedGroups.clear();
+      lastJump = null; computeSearch(searchBox.value);
+      matchEl.textContent = searchSids == null ? '' : searchSids.size + ' sessions match';
+      selectedRoot = null; selectedT = null; treeZoom = 1; treeCenter = null;
+      lanesSeriesData = []; lanesYMeta = [];
+      document.getElementById('scopeCount').textContent = data.length + ' matching waiter rows / ' + sourceRows.length +
+        ' total · ' + rows.length + ' before episode restriction' + (episodeIndex == null ? '' : ' · episode ' + (episodeIndex + 1));
+      document.getElementById('counter').textContent = data.length + ' scoped samples';
+      if (!data.length) {
+        [lanesChart, treeChart, overviewChart].forEach(chart => chart.setOption({ series: [] }, true));
+        document.getElementById('kpis').innerHTML = '';
+        document.getElementById('findings').textContent = 'No matching waiter rows. Reset scope to recover all observations.';
+        showSamples([], 'No matching waiter rows'); renderTreePanel(); updateBanner(); return;
+      }
+      peakT = findPeak(); renderSummary(); renderLanes(); renderOverview(); applySelection(peakT, null);
+    }
+    function incidentBrief(redact) {
+      const scopedEpisodes = makeEpisodes(data);
+      const lines = ['# Sampled contention incident brief', '',
+        'Waiter rows: ' + data.length, 'Sample-weight blocked session-time (seconds): ' + blockedMs(data) / 1000,
+        'Episodes in scope: ' + scopedEpisodes.length,
+        'Peak sampled waiters: ' + Math.max(0, ...scopedEpisodes.map(ep => ep.peak)),
+        'Observed parent changes: ' + scopedEpisodes.reduce((n, ep) => n + ep.changes, 0),
+        '', 'Sampled evidence only; gaps do not establish continuous blocking or confirmed resolution.'];
+      if (redact) return lines.concat('', 'REDACTED: aggregate-only allowlist. All identifiers, database, timestamps, filters, SQL, literals, modules, objects, users, machines and client fields omitted.').join('\n');
+      lines.push('', 'Database: ' + (meta.dbName || '?'), 'Scope: exact AND waiter filters; referenced blocker context retained.');
+      filterFields.forEach(pair => lines.push(pair[0] + ': ' + (document.getElementById('filter' + pair[0]).value || 'All')));
+      lines.push('Episode selection: ' + (episodeIndex == null ? 'All' : episodeIndex + 1));
+      scopedEpisodes.forEach((ep, i) => lines.push(episodeDescription(ep, i)));
+      const evidence = selectedSamples();
+      lines.push('', '## Selected sample / chain evidence', 'Selected observation: ' + (selectedT == null ? 'none' : fmtTs(selectedT)), 'Selected chain: ' + (selectedRoot || 'all'), 'Evidence rows: ' + evidence.length);
+      evidence.forEach(row => lines.push('- ' + waiterKey(row) + ' → ' + blockerKey(row) + ' | ' + (row.ev || '') + ' | SQL ID ' + (row.sqlId || '?')));
+      if (data.length) lines.push('', '## Investigation SQL', 'Window SQL is a broader retrieval starting point; apply waiter filters above when investigating.', '```sql', sqlForWindow(), '```');
+      if (evidence.length) lines.push('```sql', sqlForSample(evidence, selectedT), '```');
+      return lines.join('\n');
+    }
+    filterFields.forEach(pair => {
+      const el = document.getElementById('filter' + pair[0]);
+      el.innerHTML = '<option value="">All</option>' + [...new Set(sourceRows.map(row => fieldValue(row, pair[1])))].sort().map(value =>
+        '<option value="' + escapeHtml(value) + '">' + escapeHtml(value) + '</option>').join('');
+      el.onchange = () => { episodeIndex = null; rebuildScope(); };
+    });
+    document.getElementById('scopeReset').onclick = () => { filterFields.forEach(pair => { document.getElementById('filter' + pair[0]).value = ''; }); episodeIndex = null; rebuildScope(); };
+    document.getElementById('episodeSelect').onchange = () => { const value = document.getElementById('episodeSelect').value; episodeIndex = value === '' ? null : Number(value); rebuildScope(); };
+    document.getElementById('episodeClear').onclick = () => { episodeIndex = null; rebuildScope(); };
+    document.getElementById('briefDownload').onclick = () => {
+      const text = incidentBrief(document.getElementById('briefRedact').checked);
+      const fallback = document.getElementById('briefText'); fallback.value = text;
+      try {
+        const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob), a = document.createElement('a');
+        a.href = url; a.download = 'contention-incident.md'; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) { fallback.focus(); if (fallback.select) fallback.select(); }
+    };
+    updateEpisodes(data);
+    document.getElementById('scopeCount').textContent = data.length + ' matching waiter rows / ' + sourceRows.length + ' total';
 
     // ----- Wire up controls -----
     function renderAll() {

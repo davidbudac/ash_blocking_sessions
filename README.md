@@ -20,10 +20,21 @@ in the browser (no database, no install).
 
 ## What the report shows
 
-- **Key findings** — blocked session-time, the biggest root blocker, whether it
-  was *idle while holding the lock* (the classic uncommitted transaction) or
-  actively running SQL, peak concurrency, and whether the contention resolved
-  before the window ended or was still ongoing.
+- **Key findings** — estimated blocked session-time, the biggest observed root
+  blocker, sampled blocker activity (ON CPU, waiting, or unknown), peak
+  concurrency, and the last observed blocking sample. Missing ASH evidence
+  does not prove idleness or establish when contention resolved.
+- **Investigation scope** — exact, combined filters for container ID, service,
+  module, object and SQL ID. Summaries, timelines and details recalculate for
+  matching waiter samples, retaining their referenced blocker context.
+- **Contention episodes** — observed bursts separated by gaps longer than two
+  bounded sample intervals, with recurrence counts, weighted blocked time,
+  peak waiters and observed blocker changes. Select an episode to restrict the
+  investigation; gaps do not prove resolution.
+- **Incident brief** — download Markdown containing the current scope,
+  selected sample/chain evidence and investigation SQL. Optional redaction
+  exports aggregate counts and estimates only, omitting identifiers, timestamps
+  and SQL. A selectable text fallback works when downloads are unavailable.
 - **Session timeline** — one lane per session that ever blocked or waited,
   grouped by wait chain. Filled cells = waiting (colored by wait event/class),
   outlined cells = holding a lock, both = mid-chain. One cell = one ASH sample.
@@ -97,7 +108,10 @@ open "$(ls -1t reports/*.html | head -n1)"
 ```
 
 The script runs the PL/SQL emitter with local `sqlplus` and writes the finished
-HTML into `reports/`.
+HTML into `reports/`. ECharts is embedded, so opening a generated report needs
+no network connection. Output names must be simple `.html` basenames; existing
+files and the curated demo cannot be overwritten. AUTO names contain the
+timestamp and process ID. See [packaging details](PACKAGING.md).
 
 ### Investigating a past incident
 
@@ -106,14 +120,18 @@ HTML into `reports/`.
    hours (the emitter refuses > 100k blocking samples — narrow the window
    rather than raising the guard). The report spans all containers; blocking
    chains never cross a container, so per-PDB chains stay cleanly separated.
-4. Read top-down: key findings for the verdict, timeline for who suffered and
+3. Read top-down: key findings for the evidence, timeline for who suffered and
    who held the locks, then click into samples for the tree and the
    object/SQL detail.
 
 Caveats: `DBA_HIST` keeps roughly one ASH sample every 10 seconds, so sub-10s
-blips can be invisible and "blocked session-time" is an estimate
-(samples × sample interval). An empty report means no *blocking* samples were
-captured in that window/container.
+blips can be invisible. Blocked session-time is a sample-weight estimate:
+new reports retain `USECS_PER_ROW` and use an explicitly recorded historical
+retention factor of 10; older reports assume 10 seconds per retained row.
+Gaps between blocking observations never become the sampling interval. An empty
+report means no *blocking* samples were captured in the requested window.
+Session identities include instance, SID and serial number; an unresolved
+blocker serial stays explicitly unknown instead of joining a reused SID.
 
 ### Using a named account instead of SYSDBA
 
@@ -143,6 +161,21 @@ set `ASH_SEED_FORCE=1` to skip the prompt in scripted test runs.
 
 For UI work without any database, open `reports/ash_blocking_demo.html` — the
 same report with a rich synthetic dataset inlined.
+
+Edit `assets/template.html`, then run `./scripts/regenerate-demos.sh` to update
+both the local and website demos from the maintained synthetic fixtures.
+Do not edit generated demos by hand.
+
+Local validation (Node 18+ and Python 3; no Oracle required):
+
+```sh
+node --test tests/*.test.cjs
+python3 -m unittest discover -s tests/packaging -v
+ASH_TEST_DEMO_PARITY=1 node --test tests/report.test.cjs
+```
+
+These checks exercise report behavior and packaging. Live Oracle SQL and AIX
+execution require validation on the appropriate host.
 
 ## Repository layout
 

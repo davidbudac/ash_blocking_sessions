@@ -105,9 +105,10 @@ BEGIN
       -- the b.* enrichment join below.
       SELECT /*+ MATERIALIZE */
              dbid, snap_id, sample_id, sample_time, instance_number,
+             COUNT(*) OVER (PARTITION BY dbid, snap_id, sample_id, instance_number, session_id) AS sid_sample_rows,
              session_id, session_serial#, blocking_inst_id, blocking_session,
              blocking_session_serial#, blocking_session_status, event, wait_class,
-             session_state, sql_id, module, action, program, machine, user_id, con_id,
+             session_state, usecs_per_row, sql_id, module, action, program, machine, user_id, con_id,
              current_obj#,
              -- Root-cause pointers (all plain columns of the view; no extra cost).
              session_type, sql_opname, sql_exec_start, sql_plan_hash_value,
@@ -125,9 +126,9 @@ BEGIN
                'inst'    VALUE w.instance_number,
                'sid'     VALUE w.session_id,
                'serial'  VALUE w.session_serial#,
-               'bInst'   VALUE w.blocking_inst_id,
+               'bInst'   VALUE NVL(w.blocking_inst_id, w.instance_number),
                'bSid'    VALUE w.blocking_session,
-               'bSer'    VALUE w.blocking_session_serial#,
+               'bSer'    VALUE COALESCE(NULLIF(w.blocking_session_serial#, 0), b.session_serial#),
                'bStatus' VALUE w.blocking_session_status,
                'ev'      VALUE w.event,
                'wc'      VALUE w.wait_class,
@@ -141,6 +142,11 @@ BEGIN
                'userId'  VALUE w.user_id,
                'user'    VALUE u_w.username,
                'conId'   VALUE w.con_id,
+               'bObserved' VALUE CASE WHEN b.session_id IS NOT NULL THEN 1 END,
+               'usecsPerRow' VALUE w.usecs_per_row,
+               -- Historical ASH retains roughly one in ten in-memory samples.
+               -- Preserve raw timing and make the weighting assumption explicit.
+               'sampleWeightMs' VALUE CASE WHEN w.usecs_per_row > 0 THEN w.usecs_per_row / 1000 * 10 END,
                'bEv'     VALUE b.event,
                'bSqlId'  VALUE b.sql_id,
                'bWc'     VALUE b.wait_class,
@@ -209,7 +215,9 @@ BEGIN
             AND b.sample_id        = w.sample_id
             AND b.instance_number  = NVL(w.blocking_inst_id, w.instance_number)
             AND b.session_id       = w.blocking_session
-            AND b.session_serial#  = w.blocking_session_serial#
+            AND (b.session_serial# = w.blocking_session_serial#
+                 OR ((w.blocking_session_serial# IS NULL OR w.blocking_session_serial# = 0)
+                     AND b.sid_sample_rows = 1))
       -- Container-aware lookups: DBA_USERS/DBA_OBJECTS in CDB$ROOT can't see
       -- PDB users/objects, so join the CDB_* views on (con_id, id) instead.
       LEFT JOIN cdb_users u_w ON u_w.con_id = w.con_id AND u_w.user_id = w.user_id
@@ -242,6 +250,11 @@ BEGIN
            'endTime'     VALUE TO_CHAR(l_end,   'YYYY-MM-DD"T"HH24:MI:SS'),
            'generatedAt' VALUE TO_CHAR(SYSTIMESTAMP, 'YYYY-MM-DD"T"HH24:MI:SS'),
            'rowCount'    VALUE l_row_count,
+           -- USECS_PER_ROW is available from 12.2 (also required by JSON SQL).
+           -- It describes the in-memory sampling interval, not the retained gap.
+           'sampleCadenceMs' VALUE 10000,
+           'sampleWeightFactor' VALUE 10,
+           'sampleWeightSource' VALUE 'USECS_PER_ROW x 10 historical retention estimate',
            -- sql_id -> first 200 chars of the statement, for every SQL that ran
            -- in the window (superset of waiter + blocker SQL ids), so the report
            -- can show what the SQL was without a trip back to the DB.
