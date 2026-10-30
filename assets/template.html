@@ -53,6 +53,23 @@
     #treePanel.tree-fs { display: flex; flex-direction: column; background: #fff; overflow: auto; margin: 0; border-radius: 0; }
     #treePanel.tree-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1000; }
     #treePanel.tree-fs #chart-tree { flex: 1 1 0; height: auto !important; resize: none; }
+    /* Structured tree tooltips: bounded width, readable type, scrollable long evidence. */
+    .tree-tip { inline-size: min(440px, calc(100vw - 32px)); max-block-size: min(560px, 70vh); overflow: auto; padding: 16px; white-space: normal; overflow-wrap: break-word; font-size: 14px; line-height: 1.5; color: var(--ink); }
+    .tree-tip-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin-block-end: 10px; }
+    .tree-tip-title { font-size: 17px; font-weight: 700; overflow-wrap: anywhere; }
+    .tree-tip-role { padding: 2px 8px; border-radius: 5px; background: var(--bg); font-weight: 600; color: var(--accent); }
+    .tree-tip-role.root { color: var(--warn); }
+    .tree-tip-role.mid { color: var(--chain); }
+    .tree-tip-section { border-block-start: 1px solid var(--line); padding-block-start: 10px; margin-block-start: 10px; }
+    .tree-tip-heading { font-size: 14px; font-weight: 700; margin-block-end: 6px; }
+    .tree-tip-facts { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 5px 12px; margin: 0; }
+    .tree-tip-counts { grid-template-columns: minmax(0, 1fr) auto; }
+    .tree-tip-facts dt { color: oklch(0.48 0.02 250); }
+    .tree-tip-facts dd { margin: 0; min-inline-size: 0; overflow-wrap: anywhere; }
+    .tree-tip code { font-size: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .tree-tip-sql { margin-block-start: 8px; padding: 9px 10px; border-radius: 5px; background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .tree-tip-footer { margin-block-start: 12px; color: var(--accent); }
+
     /* Hierarchical blocker -> waiter list in the sample detail */
     ul.chain-tree, ul.chain-tree ul { list-style: none; margin: 0; padding: 0; }
     ul.chain-tree ul { margin-left: 10px; padding-left: 12px; border-left: 1px solid #e3e7ea; }
@@ -1669,58 +1686,68 @@ SELECT a.*
 
       treeChart.setOption({
         tooltip: {
+          renderMode: 'html', confine: true, enterable: true,
+          backgroundColor: '#fff', borderColor: '#d6dee6', borderWidth: 1, padding: 0,
+          textStyle: { fontSize: 14, color: '#2c3e50' },
+          extraCssText: 'border-radius:10px;box-shadow:0 8px 28px rgba(24,39,56,0.16);white-space:normal;',
           formatter: p => {
+            // Only helpers create markup; all report values are escaped at the boundary.
+            const fact = (label, value, code) => value == null || value === '' ? '' :
+              `<dt>${escapeHtml(label)}</dt><dd>${code ? '<code>' : ''}${escapeHtml(value)}${code ? '</code>' : ''}</dd>`;
+            const facts = rows => `<dl class="tree-tip-facts">${rows}</dl>`;
+            const section = (title, content) => content ? `<div class="tree-tip-section"><div class="tree-tip-heading">${escapeHtml(title)}</div>${content}</div>` : '';
+            const card = (title, role, kind, content, footer) => `<div class="tree-tip"><div class="tree-tip-head"><span class="tree-tip-title">${escapeHtml(title)}</span><span class="tree-tip-role ${kind}">${escapeHtml(role)}</span></div>${content}${footer ? `<div class="tree-tip-footer">${escapeHtml(footer)}</div>` : ''}</div>`;
             if (p.dataType === 'edge') {
               const e = p.data._edge;
-              const evLines = [...e.events.entries()].filter(x => x[0]).sort((a,b)=>b[1]-a[1])
-                .map(([ev,n]) => `&nbsp;&nbsp;${escapeHtml(ev)}: <b>${n}</b>`).join('<br>');
+              const counts = entries => `<dl class="tree-tip-facts tree-tip-counts">${entries.map(([name, count]) => fact(name, `${count} sample${count === 1 ? '' : 's'}`)).join('')}</dl>`;
+              const events = [...e.events.entries()].filter(x => x[0]).sort((a,b)=>b[1]-a[1]);
               const objCounts = new Map();
               for (const s of e.samples) if (s.obj) objCounts.set(s.obj, (objCounts.get(s.obj) || 0) + 1);
-              const objLines = [...objCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 3)
-                .map(([o,n]) => `&nbsp;&nbsp;${escapeHtml(o)}: <b>${n}</b>`).join('<br>');
-              return `<b>${endName(e.source)} → ${endName(e.target)}</b> (waits on)<br>` +
-                     `${e.samples.length} samples<br>` +
-                     `Events:<br>${evLines || '&nbsp;&nbsp;(none)'}` +
-                     (objLines ? `<br>On object:<br>${objLines}` : '');
-            } else {
-              const n = p.data._node;
-              if (!n) return p.name;
-              if (n.agg) {
-                const shown = n.members.slice(0, 15).map(escapeHtml).join(', ');
-                return `<b>${n.members.length} similar waiters</b> on ${escapeHtml(n.gk.split('|')[0])}<br>` +
-                       `Group: <b>${escapeHtml((n.module || '(no module)') + (n.action ? '/' + n.action : ''))}</b> · ${escapeHtml(n.ev || '(no event)')}<br>` +
-                       `${n.samples.length} blocked samples here<br>` +
-                       `SIDs: ${shown}${n.members.length > 15 ? ` +${n.members.length - 15} more` : ''}<br>` +
-                       `<i>Click to expand into ${n.members.length} sessions</i>`;
-              }
-              const role = (n.isWaiter && n.isBlocker) ? 'chain middle' : n.isBlocker ? 'root blocker' : 'waiter';
-              const id = identityFor(n.id);
-              const idLines = ['user','prog','module','action','mach','svc','client','sessType']
-                .filter(k => id[k] && !(k === 'sessType' && id[k] === 'FOREGROUND'))
-                .map(k => `&nbsp;&nbsp;${k === 'svc' ? 'service' : k === 'sessType' ? 'type' : k}: <b>${escapeHtml(id[k])}</b>`).join('<br>');
-              // What this session is doing at the selected instant: as a waiter its own
-              // row, as a blocker the enrichment fields captured on its waiters' rows.
-              const own = n.samples.find(x => waiterKey(x) === n.id);
-              const asB = n.samples.find(x => blockerKey(x) === n.id) || data.find(x => x._tms === selectedT && blockerKey(x) === n.id);
-              const doing = [];
-              if (own) {
-                doing.push(`Waiting on: <b>${escapeHtml(own.ev || '?')}</b>${own.obj ? ' on <b>' + escapeHtml(own.obj) + '</b>' : ''}${own.tw ? ` (${fmtMicros(own.tw)})` : ''}`);
-                const e = enqInfo(own.ev, own.p1, own.p2, own.p3);
-                if (e) doing.push(`Lock: ${escapeHtml(e.type)}${e.res ? ' ' + escapeHtml(e.res) : ''} mode <b>${escapeHtml(e.modeTxt)}</b>`);
-                if (own.sqlId) doing.push(`SQL: <b>${escapeHtml(own.sqlId)}</b>${own.sqlOp ? ' ' + escapeHtml(own.sqlOp) : ''}${sqlSnip(own.sqlId) ? ' — ' + escapeHtml(sqlSnip(own.sqlId, 70)) : ''}`);
-                if (own.plsql) doing.push(`PL/SQL: <b>${escapeHtml(own.plsql)}</b>`);
-                if (own.xid) doing.push(`XID: ${escapeHtml(own.xid)}`);
-              } else if (asB) {
-                doing.push(`Doing: <b>${escapeHtml(blockerActivity(asB))}</b>`);
-                if (asB.bSqlId) doing.push(`SQL: <b>${escapeHtml(asB.bSqlId)}</b>${asB.bSqlOp ? ' ' + escapeHtml(asB.bSqlOp) : ''}${sqlSnip(asB.bSqlId) ? ' — ' + escapeHtml(sqlSnip(asB.bSqlId, 70)) : ''}`);
-                if (asB.bPlsql) doing.push(`PL/SQL: <b>${escapeHtml(asB.bPlsql)}</b>`);
-                if (asB.bXid) doing.push(`XID: ${escapeHtml(asB.bXid)}`);
-              }
-              return `<b>${n.id}</b> · ${role}<br>` +
-                     `${n.samples.length} blocked samples here · <b>${p.data._impact}</b> stuck behind it` +
-                     (idLines ? `<br>Identity:<br>${idLines}` : '') +
-                     (doing.length ? `<br>${doing.join('<br>')}` : '');
+              const objects = [...objCounts.entries()].sort((a,b)=>b[1]-a[1]);
+              return card(`${endName(e.source)} → ${endName(e.target)}`, 'Blocking relationship', '',
+                facts(fact('Waiter', endName(e.source)) + fact('Blocker', endName(e.target)) + fact('Samples', e.samples.length)) +
+                section('Wait events', events.length ? counts(events) : 'No event recorded') +
+                section('Objects', objects.length ? counts(objects.slice(0, 3)) + (objects.length > 3 ? `<div>+${objects.length - 3} more objects</div>` : '') : ''),
+                'Click to inspect these samples');
             }
+            const n = p.data._node;
+            if (!n) return escapeHtml(p.name);
+            if (n.agg) {
+              const shown = n.members.slice(0, 15).join(', ');
+              return card(`${n.members.length} similar waiters`, 'Grouped sessions', '',
+                facts(fact('Blocker', n.gk.split('|')[0]) + fact('Module', n.module || '(no module)') + fact('Action', n.action) + fact('Wait event', n.ev || '(no event)') + fact('Samples', n.samples.length)) +
+                section('Sessions', escapeHtml(shown) + (n.members.length > 15 ? ` +${n.members.length - 15} more` : '')),
+                `Click to expand into ${n.members.length} sessions`);
+            }
+            const role = (n.isWaiter && n.isBlocker) ? 'Blocks & waits' : n.isBlocker ? 'Root blocker' : 'Waiter';
+            const kind = n.isWaiter && n.isBlocker ? 'mid' : n.isBlocker ? 'root' : '';
+            const id = identityFor(n.id);
+            const labels = { user: 'User', prog: 'Program', module: 'Module', action: 'Action', mach: 'Machine', svc: 'Service', client: 'Client ID', sessType: 'Type' };
+            const identity = Object.keys(labels)
+              .filter(k => id[k] && !(k === 'sessType' && id[k] === 'FOREGROUND'))
+              .map(k => fact(labels[k], id[k])).join('');
+            // Prefer this session's waiter row; roots use blocker enrichment at this instant.
+            const own = n.samples.find(x => waiterKey(x) === n.id);
+            const asB = n.samples.find(x => blockerKey(x) === n.id) || data.find(x => x._tms === selectedT && blockerKey(x) === n.id);
+            let activity = '', sqlId, sqlOp, plsql, xid;
+            if (own) {
+              activity = fact('Waiting on', own.ev || '?') + fact('Object', own.obj) + fact('Wait time', own.tw ? fmtMicros(own.tw) : '');
+              const e = enqInfo(own.ev, own.p1, own.p2, own.p3);
+              if (e) activity += fact('Lock', e.type + (e.res ? ' ' + e.res : '')) + fact('Mode', e.modeTxt);
+              sqlId = own.sqlId; sqlOp = own.sqlOp; plsql = own.plsql; xid = own.xid;
+            } else if (asB) {
+              activity = fact('Doing', blockerActivity(asB));
+              sqlId = asB.bSqlId; sqlOp = asB.bSqlOp; plsql = asB.bPlsql; xid = asB.bXid;
+            }
+            activity += fact('PL/SQL', plsql, true) + fact('XID', xid, true);
+            const sql = fact('SQL ID', sqlId, true) + fact('Operation', sqlOp);
+            const snippet = sqlSnip(sqlId, 200);
+            return card(n.id, role, kind,
+              facts(fact('Own samples', n.samples.length) + fact('Chain impact', `${p.data._impact} blocked sample${p.data._impact === 1 ? '' : 's'}`)) +
+              section('Session identity', identity ? facts(identity) : '') +
+              section('Current activity', activity ? facts(activity) : '') +
+              section('SQL', sql ? facts(sql) + (snippet ? `<div class="tree-tip-sql"><code>${escapeHtml(snippet)}</code></div>` : '') : ''),
+              'Click to inspect this session and its chain');
           }
         },
         legend: { data: [{name:'waiter'},{name:'blocks & waits'},{name:'root blocker'}]
